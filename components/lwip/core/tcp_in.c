@@ -1660,7 +1660,10 @@ tcp_receive(struct tcp_pcb *pcb)
   } else {
     /* Segments with length 0 is taken care of here. Segments that
        fall out of the window are ACKed. */
-    if (!TCP_SEQ_BETWEEN(seqno, pcb->rcv_nxt, pcb->rcv_nxt + pcb->rcv_wnd - 1)) {
+    /* If we already are at the right window and the send window is zero, we
+       should not ack as we already have set up a prober. */
+    if (!(seqno == pcb->rcv_nxt && pcb->snd_wnd == 0) &&
+        !TCP_SEQ_BETWEEN(seqno, pcb->rcv_nxt, pcb->rcv_nxt + pcb->rcv_wnd - 1)) {
       tcp_ack_now(pcb);
     }
   }
