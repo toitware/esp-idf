@@ -974,6 +974,10 @@ ip4_output_if_opt_src(struct pbuf *p, const ip4_addr_t *src, const ip4_addr_t *d
     netif_loop_output(netif, p);
   }
 #endif /* LWIP_MULTICAST_TX_OPTIONS */
+  // If broadcast, process locally as well.
+  if (ip4_addr_isbroadcast(dest, netif)) {
+    netif_loop_output(netif, p);
+  }
 #endif /* ENABLE_LOOPBACK */
 #if IP_FRAG
   /* don't fragment if interface has mtu set to 0 [loopif] */
