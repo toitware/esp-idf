@@ -52,7 +52,7 @@
 
 [submodule "components/lwip/lwip"]
 	path = components/lwip/lwip
-	url = https://github.com/toitware/esp-lwip/tree/lwip-fix
+	url = https://github.com/toitware/esp-lwip.git
 
 [submodule "components/mqtt/esp-mqtt"]
 	path = components/mqtt/esp-mqtt
