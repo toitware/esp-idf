@@ -2,7 +2,16 @@
 # Component Makefile
 #
 
-COMPONENT_OBJS := heap_caps_init.o heap_caps.o multi_heap.o heap_trace.o
+COMPONENT_SRCDIRS := . third_party/dartino
+COMPONENT_OBJS := heap_caps_init.o heap_caps.o heap_trace.o
+
+ifdef CONFIG_CMPCT_MALLOC_HEAP
+COMPONENT_OBJS += third_party/dartino/cmpctmalloc.o
+endif
+
+ifndef CONFIG_CMPCT_MALLOC_HEAP
+COMPONENT_OBJS += multi_heap.o
+endif
 
 ifndef CONFIG_HEAP_POISONING_DISABLED
 COMPONENT_OBJS += multi_heap_poisoning.o
