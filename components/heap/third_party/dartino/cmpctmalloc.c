@@ -537,35 +537,6 @@ IRAM_ATTR void *cmpct_alloc(cmpct_heap_t *heap, size_t size)
     return result;
 }
 
-void *cmpct_memalign(cmpct_heap_t *heap, size_t size, size_t alignment)
-{
-    if (alignment < 8) return cmpct_alloc(heap, size);
-    size_t padded_size =
-        size + alignment + sizeof(free_t) + sizeof(header_t);
-    char *unaligned = (char *)cmpct_alloc(heap, padded_size);
-    lock(heap);
-    size_t mask = alignment - 1;
-    uintptr_t payload_int = (uintptr_t)unaligned + sizeof(free_t) +
-                            sizeof(header_t) + mask;
-    char *payload = (char *)(payload_int & ~mask);
-    if (unaligned != payload) {
-        header_t *unaligned_header = (header_t *)unaligned - 1;
-        header_t *header = (header_t *)payload - 1;
-        size_t left_over = payload - unaligned;
-        create_allocation_header(
-            header, 0, unaligned_header->size - left_over, unaligned_header);
-        header_t *right = right_header(unaligned_header);
-        unaligned_header->size = left_over;
-        FixLeftPointer(right, header);
-        unlock(heap);
-        cmpct_free(heap, unaligned);
-    } else {
-        unlock(heap);
-    }
-    // TODO: Free the part after the aligned allocation.
-    return payload;
-}
-
 IRAM_ATTR void cmpct_free(cmpct_heap_t *heap, void *payload)
 {
     if (payload == NULL) return;
@@ -817,7 +788,6 @@ IRAM_ATTR void *cmpct_realloc_impl(cmpct_heap_t *heap, void *p, size_t size)
     }
 }
 
-
 IRAM_ATTR size_t cmpct_get_allocated_size_impl(cmpct_heap_t *heap, void *p)
 {
     if (p == NULL) return 0;
@@ -932,7 +902,7 @@ IRAM_ATTR static void page_free(cmpct_heap_t *heap, void *address, int page_coun
     heap->pages[page].continued = 0; 
 }
 
-
-void multi_heap_set_lock(cmpct_heap_t *heap, void* lock) {
+void multi_heap_set_lock(cmpct_heap_t *heap, void *lock)
+{
     heap->lock = lock;
 }
