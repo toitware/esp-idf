@@ -59,8 +59,8 @@ typedef uintptr_t vaddr_t;
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
-// This is a two layer allocator.  Allocations > 4000 bytes are allocated from
-// a block allocator that gives out 4k aligned blocks.  Those less than 4000
+// This is a two layer allocator.  Allocations > 4048 bytes are allocated from
+// a block allocator that gives out 4k aligned blocks.  Those less than 4048
 // bytes are allocated from cmpctmalloc.  This implementation of cmpctmalloc
 // only requests blocks from the block allocator that are 4k large, thus no
 // pointer returned from cmpctmalloc can be 4k aligned, but all allocations
@@ -85,17 +85,17 @@ static void page_free(cmpct_heap_t *heap, void *address, int pages_dummy);
 #define FREE_FILL 0x77
 #define PADDING_FILL 0x55
 
-#define HEAP_GROW_SIZE (4 * 1024) /* Grow less aggressively */
+#define HEAP_GROW_SIZE (4 * 1024) /* Grow only one page at a time. */
 
 #define PAGE_SIZE_SHIFT 12
 #define PAGE_SIZE (1 << PAGE_SIZE_SHIFT)
-#define SMALL_ALLOCATION_LIMIT 4000
+#define SMALL_ALLOCATION_LIMIT 4048
 #define IS_PAGE_ALIGNED(x) (((uintptr_t)(x) & (PAGE_SIZE - 1)) == 0)
 #define PAGES_FOR_BYTES(x) (((x) + PAGE_SIZE - 1) >> PAGE_SIZE_SHIFT)
 
 STATIC_ASSERT(IS_PAGE_ALIGNED(HEAP_GROW_SIZE))
 
-// Individual allocations above 4Mbytes are just fetched directly from the
+// Individual allocations above 4kbytes are just fetched directly from the
 // block allocator.
 #define HEAP_ALLOC_VIRTUAL_BITS 12
 
@@ -218,7 +218,7 @@ IRAM_ATTR static int size_to_index_helper(
     size += adjust;
     // After 128 the buckets are logarithmically spaced, every 16 up to 256,
     // every 32 up to 512 etc.  This can be thought of as rows of 8 buckets.
-    // GCC intrinsic count-leading-zeros.
+    // We use the compiler intrinsic count-leading-zeros to find the bucket.
     // Eg. 128-255 has 24 leading zeros and we want row to be 4.
     unsigned row = sizeof(size_t) * 8 - 4 - __builtin_clzl(size);
     // For row 4 we want to shift down 4 bits.
@@ -487,7 +487,7 @@ IRAM_ATTR void *cmpct_alloc(cmpct_heap_t *heap, size_t size)
 {
     if (size == 0u) return NULL;
 
-    ASSERT(size < SMALL_ALLOCATION_LIMIT);
+    ASSERT(size <= SMALL_ALLOCATION_LIMIT);
 
     size_t rounded_up;
     int start_bucket = size_to_index_allocating(size, &rounded_up);
@@ -613,7 +613,8 @@ IRAM_ATTR static void add_to_heap(cmpct_heap_t *heap, void *new_area, size_t siz
 // Called with the lock, apart from during init.
 IRAM_ATTR static ssize_t heap_grow(cmpct_heap_t *heap, free_t **bucket)
 {
-    void *ptr = page_alloc(heap, 1);
+    ASSERT(HEAP_GROW_SIZE == PAGE_SIZE);
+    void *ptr = page_alloc(heap, 1);  // Allocate one page more.
     if (ptr == NULL) return -1;
     heap->size += PAGE_SIZE;
     LTRACEF("growing heap by 0x%zx bytes, new ptr %p\n", size, ptr);
@@ -693,7 +694,7 @@ cmpct_heap_t *cmpct_register_impl(void *start, size_t size)
 
 IRAM_ATTR void *cmpct_malloc_impl(cmpct_heap_t *heap, size_t size)
 {
-    if (size < SMALL_ALLOCATION_LIMIT) {
+    if (size <= SMALL_ALLOCATION_LIMIT) {
         return cmpct_alloc(heap, size);
     }
     lock(heap);
@@ -738,7 +739,7 @@ IRAM_ATTR void *cmpct_realloc_impl(cmpct_heap_t *heap, void *p, size_t size)
         return NULL;
     }
     if (!is_page_allocated(p)) {
-        if (size < SMALL_ALLOCATION_LIMIT) {
+        if (size <= SMALL_ALLOCATION_LIMIT) {
             // From cmpct to cmpct heap.
             return cmpct_realloc(heap, p, size);
         }
@@ -750,41 +751,39 @@ IRAM_ATTR void *cmpct_realloc_impl(cmpct_heap_t *heap, void *p, size_t size)
         memcpy(new_area, p, allocation_size(p));
         cmpct_free(heap, p);
         return new_area;
-    } else {
-        if (size >= SMALL_ALLOCATION_LIMIT) {
-            lock(heap);
-            // Realloc from page allocator to page allocator.
-            intptr_t new_pages = PAGES_FOR_BYTES(size);
-            intptr_t page = page_number(heap, p);
-            intptr_t j;
-            for (j = 1; j < new_pages; j++) {
-                if (!heap->pages[page + j].continued) {
-                    // No space to expand, we have to do a real realloc.
-                    void *new_area = page_alloc(heap, size);
-                    unlock(heap);
-                    if (!new_area) return NULL;
-                    memcpy(new_area, p, j << PAGE_SIZE_SHIFT);
-                    return new_area;
-                }
+    } else if (size > SMALL_ALLOCATION_LIMIT) {
+        lock(heap);
+        // Realloc from page allocator to page allocator.
+        intptr_t new_pages = PAGES_FOR_BYTES(size);
+        intptr_t page = page_number(heap, p);
+        intptr_t j;
+        for (j = 1; j < new_pages; j++) {
+            if (!heap->pages[page + j].continued) {
+                // No space to expand, we have to do a real realloc.
+                void *new_area = page_alloc(heap, size);
+                unlock(heap);
+                if (!new_area) return NULL;
+                memcpy(new_area, p, j << PAGE_SIZE_SHIFT);
+                return new_area;
             }
-            // There was enough space to expand/shrink in place.
-            for (; heap->pages[j].continued; j++) {
-                // Free up the extra pages if we are shrinking.
-                ASSERT(heap->pages[j].in_use);
-                heap->pages[j].in_use = 0;
-                heap->pages[j].continued = 0;
-            }
-            unlock(heap);
-            return p;
-        } else {
-            // Realloc from page allocator to cmpct allocator.
-            void *new_area = cmpct_alloc(heap, size);
-            memcpy(new_area, p, size);
-            lock(heap);
-            page_free(heap, p, 0);
-            unlock(heap);
-            return new_area;
         }
+        // There was enough space to expand/shrink in place.
+        for (; heap->pages[j].continued; j++) {
+            // Free up the extra pages if we are shrinking.
+            ASSERT(heap->pages[j].in_use);
+            heap->pages[j].in_use = 0;
+            heap->pages[j].continued = 0;
+        }
+        unlock(heap);
+        return p;
+    } else {
+        // Realloc from page allocator to cmpct allocator.
+        void *new_area = cmpct_alloc(heap, size);
+        memcpy(new_area, p, size);
+        lock(heap);
+        page_free(heap, p, 0);
+        unlock(heap);
+        return new_area;
     }
 }
 
@@ -818,7 +817,9 @@ void cmpct_get_info_impl(cmpct_heap_t *heap, multi_heap_info_t *info)
     info->total_free_bytes = heap->remaining;
     info->total_allocated_bytes = heap->size - heap->remaining;
     info->largest_free_block = 0;
-    info->minimum_free_bytes = 0;  // TODO.
+    // TODO: We don't currently keep track of the all-time low number of free
+    // bytes.
+    info->minimum_free_bytes = 0;
     info->allocated_blocks = heap->allocated_blocks;
     info->free_blocks = heap->free_blocks;
     info->total_blocks = heap->free_blocks + heap->allocated_blocks;
