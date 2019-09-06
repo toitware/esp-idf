@@ -731,60 +731,20 @@ IRAM_ATTR static size_t page_number(cmpct_heap_t *heap, void *p)
     return page;
 }
 
+// This is a very simple version of realloc, which always creates a new
+// area and copies to it.
 IRAM_ATTR void *cmpct_realloc_impl(cmpct_heap_t *heap, void *p, size_t size)
 {
-    if (!p) return cmpct_malloc_impl(heap, size);
     if (!size) {
         cmpct_free_impl(heap, p);
         return NULL;
     }
-    if (!is_page_allocated(p)) {
-        if (size <= SMALL_ALLOCATION_LIMIT) {
-            // From cmpct to cmpct heap.
-            return cmpct_realloc(heap, p, size);
-        }
-        // Realloc from cmpct to page allocator.
-        lock(heap);
-        void *new_area = page_alloc(heap, PAGES_FOR_BYTES(size));
-        unlock(heap);
-        if (!new_area) return NULL;
-        memcpy(new_area, p, allocation_size(p));
-        cmpct_free(heap, p);
-        return new_area;
-    } else if (size > SMALL_ALLOCATION_LIMIT) {
-        lock(heap);
-        // Realloc from page allocator to page allocator.
-        intptr_t new_pages = PAGES_FOR_BYTES(size);
-        intptr_t page = page_number(heap, p);
-        intptr_t j;
-        for (j = 1; j < new_pages; j++) {
-            if (!heap->pages[page + j].continued) {
-                // No space to expand, we have to do a real realloc.
-                void *new_area = page_alloc(heap, size);
-                unlock(heap);
-                if (!new_area) return NULL;
-                memcpy(new_area, p, j << PAGE_SIZE_SHIFT);
-                return new_area;
-            }
-        }
-        // There was enough space to expand/shrink in place.
-        for (; heap->pages[j].continued; j++) {
-            // Free up the extra pages if we are shrinking.
-            ASSERT(heap->pages[j].in_use);
-            heap->pages[j].in_use = 0;
-            heap->pages[j].continued = 0;
-        }
-        unlock(heap);
-        return p;
-    } else {
-        // Realloc from page allocator to cmpct allocator.
-        void *new_area = cmpct_alloc(heap, size);
-        memcpy(new_area, p, size);
-        lock(heap);
-        page_free(heap, p, 0);
-        unlock(heap);
-        return new_area;
-    }
+    void* new_allocation = cmpct_malloc_impl(heap, size);
+    if (!p || !new_allocation) return new_allocation;
+    size_t old_size = cmpct_get_allocated_size_impl(heap, p);
+    memcpy(new_allocation, p, MIN(old_size, size));
+    cmpct_free_impl(heap, p);
+    return new_allocation;
 }
 
 IRAM_ATTR size_t cmpct_get_allocated_size_impl(cmpct_heap_t *heap, void *p)
