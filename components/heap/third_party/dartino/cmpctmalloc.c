@@ -59,7 +59,7 @@ typedef uintptr_t vaddr_t;
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 // Provoke crash.
-#define FATAL(reason) *(const char**)((intptr_t)reason & 0xff) = reason
+#define FATAL(reason) abort()
 
 // This is a two layer allocator.  Allocations > 4048 bytes are allocated from
 // a block allocator that gives out 4k aligned blocks.  Those less than 4048
@@ -861,7 +861,7 @@ IRAM_ATTR static void *page_alloc(cmpct_heap_t *heap, intptr_t pages)
 IRAM_ATTR static void page_free(cmpct_heap_t *heap, void *address, int page_count_dummy)
 {
     size_t page = page_number(heap, address);
-    if (page >= heap->number_of_pages) {
+    if (page >= heap->number_of_pages || !heap->pages[page].in_use || heap->pages[page].continued) {
         FATAL("Invalid free");
     }
     for (intptr_t j = page + 1; heap->pages[j].continued; j++) {
