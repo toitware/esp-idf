@@ -58,6 +58,8 @@ typedef uintptr_t vaddr_t;
 #define IS_ALIGNED(x, alignment) (((x) & ((alignment) - 1)) == 0)
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
+// Provoke crash.
+#define FATAL(reason) abort()
 
 // This is a two layer allocator.  Allocations > 4048 bytes are allocated from
 // a block allocator that gives out 4k aligned blocks.  Those less than 4048
@@ -230,8 +232,8 @@ IRAM_ATTR static int size_to_index_helper(
     // We start with 15 buckets, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96,
     // 104, 112, 120.  Then we have row 4, sizes 128 and up, with the
     // row-column 8 and up.
-    int answer = row_column + 15 - 32;
-    DEBUG_ASSERT(answer < NUMBER_OF_BUCKETS);
+    unsigned answer = row_column + 15 - 32;
+    if (answer >= NUMBER_OF_BUCKETS) FATAL("Invalid free");
     return answer;
 }
 
@@ -353,6 +355,7 @@ IRAM_ATTR static void free_memory(cmpct_heap_t *heap, void *address, void *left,
 
 IRAM_ATTR static void unlink_free(cmpct_heap_t *heap, free_t *free_area, int bucket)
 {
+    if (free_area->header.size >= (1 << HEAP_ALLOC_VIRTUAL_BITS)) FATAL("Invalid free");
     heap->remaining -= free_area->header.size;
     heap->free_blocks--;
     ASSERT(heap->remaining < 4000000000u);
@@ -541,12 +544,15 @@ IRAM_ATTR void cmpct_free(cmpct_heap_t *heap, void *payload)
 {
     if (payload == NULL) return;
     header_t *header = (header_t *)payload - 1;
-    DEBUG_ASSERT(!is_tagged_as_free(header));  // Double free!
+    if (is_tagged_as_free(header)) FATAL("Double free");
     size_t size = header->size;
     lock(heap);
     heap->allocated_blocks--;
     header_t *left = header->left;
     if (left != NULL && is_tagged_as_free(left)) {
+        // Place a free marker in the middle of the coalesced free area in
+        // order to catch more double frees.
+        header->left = tag_as_free(header->left);
         // Coalesce with left free object.
         unlink_free_unknown_bucket(heap, (free_t *)left);
         header_t *right = right_header(header);
@@ -855,6 +861,9 @@ IRAM_ATTR static void *page_alloc(cmpct_heap_t *heap, intptr_t pages)
 IRAM_ATTR static void page_free(cmpct_heap_t *heap, void *address, int page_count_dummy)
 {
     size_t page = page_number(heap, address);
+    if (page >= heap->number_of_pages || !heap->pages[page].in_use || heap->pages[page].continued) {
+        FATAL("Invalid free");
+    }
     for (intptr_t j = page + 1; heap->pages[j].continued; j++) {
         heap->pages[j].in_use = 0;
         heap->pages[j].continued = 0;
