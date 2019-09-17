@@ -43,7 +43,8 @@ string(REPLACE ";" " " ESPTOOLPY_WRITE_FLASH_STR
     "write_flash ${ESPTOOLPY_FLASH_OPTIONS} ${ESPTOOLPY_EXTRA_FLASH_OPTIONS} ${ESPTOOLPY_COMPRESSED_OPT}")
 
 if(NOT BOOTLOADER_BUILD)
-    set(ESPTOOLPY_ELF2IMAGE_OPTIONS --elf-sha256-offset 0xb0)
+    # Coordinate with changes to esp_app_desc_t!
+    set(ESPTOOLPY_ELF2IMAGE_OPTIONS --elf-sha256-offset 0x90)
 endif()
 
 if(CONFIG_SECURE_BOOT_ENABLED AND
