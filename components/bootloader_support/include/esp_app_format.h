@@ -89,7 +89,8 @@ typedef struct {
 #define ESP_APP_DESC_MAGIC_WORD 0xABCD5432  /*!< The magic word for the esp_app_desc structure that is in DROM. */
 
 /**
- * @brief Description about application.
+ * @brief Description about application.  Any changes to this struct affect the
+ * offset in the --elf-sha256-offset option to esptool!
  */
 typedef struct {
     uint32_t magic_word;        /*!< Magic word ESP_APP_DESC_MAGIC_WORD */
