@@ -95,6 +95,7 @@ typedef uintptr_t vaddr_t;
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 // Provoke crash.
 #define FATAL(reason) abort()
+#define INLINE __attribute__((always_inline)) inline
 
 // This is a two layer allocator.  Allocations > 4048 bytes are allocated from
 // a block allocator that gives out 4k aligned blocks.  Those less than 4048
@@ -153,9 +154,42 @@ STATIC_ASSERT(HEAP_GROW_SIZE <= (1u << HEAP_ALLOC_VIRTUAL_BITS))
 
 // All individual memory areas on the heap start with this.
 typedef struct header_struct {
-    size_t left_size;  // Used to find the previous memory area in address order.
-    size_t size;       // Both size fields are including the header size.
+    // This is divided up into two 16 bit fields, size and left_size.  We don't use actual
+    // 16 bit fields because they don't work in iRam, which is 32 bit only.
+    // left_size: Used to find the previous memory area in address order.
+    // size: For the next memory area.  Both size fields include the header.
+    size_t size_;
+    size_t padding_;  // This will soon be used for the process pointer.
 } header_t;
+
+static INLINE size_t get_left_size(header_t* header) {
+  // The mask here should be 0xffff, but that would cause gcc to emit a 16 bit
+  // load. We know the lowest bit of the size (top 16 bits) is always 0 so we
+  // just include it here.
+  return header->size_ & 0x1ffff;
+}
+
+static INLINE void set_left_size(header_t* header, size_t size) {
+  ASSERT(size <= 0xffff);
+  header->size_ = (header->size_ & ~0xffff) | size;
+}
+
+static INLINE size_t get_size(header_t* header) {
+  size_t field = header->size_;
+  // We should just shift down by 16, but that would cause gcc to emit a 16 bit
+  // load. We know the highest bit of the left_size (bottom 16 bits) is always 0
+  // so we extract that and add it in for no effect.  The expression (field >>
+  // 15) & 1 can be obtained with a single extui instruction.  The more obvious
+  // (field & 0x8000) would require a load of the 0x8000 constant from the
+  // constant pool.
+  return (field >> 16) + ((field >> 15) & 1);
+}
+
+static INLINE void set_size(header_t* header, size_t size) {
+  ASSERT(size <= 0xffff);
+  ASSERT((size & 1) == 0);
+  header->size_ = (header->size_ & 0xffff) | (size << 16);
+}
 
 typedef struct free_struct {
     header_t header;
@@ -202,7 +236,7 @@ IRAM_ATTR static void unlock(cmpct_heap_t *heap)
 
 static void dump_free(header_t *header)
 {
-    dprintf(INFO, "\t\tbase %p, end %p, len 0x%zx\n", header, (char*)header + header->size, header->size);
+    dprintf(INFO, "\t\tbase %p, end %p, len 0x%zx\n", header, (char*)header + get_size(header), get_size(header));
 }
 
 void cmpct_dump(cmpct_heap_t *heap)
@@ -295,7 +329,7 @@ IRAM_ATTR inline static size_t tag_as_free(size_t left_size)
 
 IRAM_ATTR inline static bool is_tagged_as_free(header_t *header)
 {
-    return (header->left_size & 1) != 0;
+    return (get_left_size(header) & 1) != 0;
 }
 
 IRAM_ATTR inline static size_t untag(size_t left_size)
@@ -305,14 +339,14 @@ IRAM_ATTR inline static size_t untag(size_t left_size)
 
 IRAM_ATTR inline static header_t *right_header(header_t *header)
 {
-    return (header_t *)((char *)header + header->size);
+    return (header_t *)((char *)header + get_size(header));
 }
 
 IRAM_ATTR inline static header_t *left_header(header_t *header)
 {
     // We only need to clear the low bit, but we clear the lowest two, because
     // otherwise gcc issues 16 bit operations that fail in iram.
-    return (header_t *)((char *)header - (header->left_size & ~3));
+    return (header_t *)((char *)header - (get_left_size(header) & ~3));
 }
 
 IRAM_ATTR inline static void set_free_list_bit(cmpct_heap_t *heap, int index)
@@ -340,14 +374,14 @@ IRAM_ATTR static int find_nonempty_bucket(cmpct_heap_t *heap, int index)
 
 IRAM_ATTR static bool is_start_of_page_allocation(header_t *header)
 {
-    return header->left_size == 0;
+    return get_left_size(header) == 0;
 }
 
 IRAM_ATTR static void create_free_area(cmpct_heap_t *heap, void *address, size_t left_size, size_t size, free_t **bucket)
 {
     free_t *free_area = (free_t *)address;
-    free_area->header.size = size;
-    free_area->header.left_size = tag_as_free(left_size);
+    set_size(&free_area->header, size);
+    set_left_size(&free_area->header, tag_as_free(left_size));
     if (bucket == NULL) {
         int index = size_to_index_freeing(size - sizeof(header_t));
         set_free_list_bit(heap, index);
@@ -367,7 +401,7 @@ IRAM_ATTR static void create_free_area(cmpct_heap_t *heap, void *address, size_t
 
 IRAM_ATTR static bool is_end_of_page_allocation(char *address)
 {
-    return ((header_t *)address)->size == 0;
+    return get_size((header_t *)address) == 0;
 }
 
 // Called with the lock.
@@ -390,7 +424,7 @@ IRAM_ATTR static void free_memory(cmpct_heap_t *heap, void *address, size_t left
             is_start_of_page_allocation(left) &&
             is_end_of_page_allocation((char *)address + size)) {
         // The entire page was free and can be returned to the page allocator.
-        free_to_page_allocator(heap, left, size + ((header_t *)left)->size + sizeof(header_t));
+        free_to_page_allocator(heap, left, size + get_size(left) + sizeof(header_t));
     } else {
         create_free_area(heap, address, left_size, size, NULL);
     }
@@ -398,8 +432,8 @@ IRAM_ATTR static void free_memory(cmpct_heap_t *heap, void *address, size_t left
 
 IRAM_ATTR static void unlink_free(cmpct_heap_t *heap, free_t *free_area, int bucket)
 {
-    if (free_area->header.size >= (1 << HEAP_ALLOC_VIRTUAL_BITS)) FATAL("Invalid free");
-    heap->remaining -= free_area->header.size;
+    if (get_size(&free_area->header) >= (1 << HEAP_ALLOC_VIRTUAL_BITS)) FATAL("Invalid free");
+    heap->remaining -= get_size(&free_area->header);
     heap->free_blocks--;
     ASSERT(heap->remaining < 4000000000u);
     ASSERT(heap->free_blocks < 4000000000u);
@@ -415,21 +449,21 @@ IRAM_ATTR static void unlink_free(cmpct_heap_t *heap, free_t *free_area, int buc
 
 IRAM_ATTR static void unlink_free_unknown_bucket(cmpct_heap_t *heap, free_t *free_area)
 {
-    return unlink_free(heap, free_area, size_to_index_freeing(free_area->header.size - sizeof(header_t)));
+    return unlink_free(heap, free_area, size_to_index_freeing(get_size(&free_area->header) - sizeof(header_t)));
 }
 
 IRAM_ATTR static void *create_allocation_header(
     header_t *header, size_t size, size_t left_size)
 {
-    header->left_size = untag(left_size);
-    header->size = size;
+    set_left_size(header, untag(left_size));
+    set_size(header, size);
     return header + 1;
 }
 
 IRAM_ATTR static void fix_left_size(header_t *right, header_t *new_left)
 {
-    int tag = right->left_size & 1;
-    right->left_size = (char*)right - (char*)new_left + tag;
+    int tag = get_left_size(right) & 1;
+    set_left_size(right, (char*)right - (char*)new_left + tag);
 }
 
 void cmpct_test_buckets(void)
@@ -597,8 +631,8 @@ IRAM_ATTR void *cmpct_alloc(cmpct_heap_t *heap, size_t size)
     }
     free_t *head = heap->free_lists[bucket];
     header_t *block = &head->header;
-    size_t block_size = block->size;
-    size_t rest = block->size - rounded_up;
+    size_t block_size = get_size(block);
+    size_t rest = get_size(block) - rounded_up;
     // We can't carve off the rest for a new free space if it's smaller than
     // the free-list linked structure.  We also don't carve it off if it's less
     // than 3.2% the size of the allocation.  This is to avoid small long-lived
@@ -617,7 +651,7 @@ IRAM_ATTR void *cmpct_alloc(cmpct_heap_t *heap, size_t size)
         unlink_free(heap, head, bucket);
     }
     void *result =
-        create_allocation_header(block, block_size, block->left_size);
+        create_allocation_header(block, block_size, get_left_size(block));
     heap->allocated_blocks++;
     for (int i = 0; i < rounded_up - sizeof(header_t); i += sizeof(int)) {
       ((int*)(result))[i >> 2] = 0;
@@ -635,7 +669,7 @@ IRAM_ATTR void cmpct_free(cmpct_heap_t *heap, void *payload)
     if (payload == NULL) return;
     header_t *header = (header_t *)payload - 1;
     if (is_tagged_as_free(header)) FATAL("Double free");
-    size_t size = header->size;
+    size_t size = get_size(header);
     lock(heap);
     heap->allocated_blocks--;
     header_t *left = left_header(header);
@@ -643,7 +677,7 @@ IRAM_ATTR void cmpct_free(cmpct_heap_t *heap, void *payload)
     if (is_tagged_as_free(left)) {
         // Place a free marker in the middle of the coalesced free area in
         // order to catch more double frees.
-        header->left_size = tag_as_free(header->left_size);
+        set_left_size(header, tag_as_free(get_left_size(header)));
         // Coalesce with left free object.
         unlink_free_unknown_bucket(heap, (free_t *)left);
         if (is_tagged_as_free(right)) {
@@ -651,11 +685,11 @@ IRAM_ATTR void cmpct_free(cmpct_heap_t *heap, void *payload)
             unlink_free_unknown_bucket(heap, (free_t *)right);
             header_t *right_right = right_header(right);
             fix_left_size(right_right, left);
-            free_memory(heap, left, left->left_size, left->size + size + right->size);
+            free_memory(heap, left, get_left_size(left), get_size(left) + size + get_size(right));
         } else {
             // Coalesce only left.
             fix_left_size(right, left);
-            free_memory(heap, left, left->left_size, left->size + size);
+            free_memory(heap, left, get_left_size(left), get_size(left) + size);
         }
     } else {
         if (is_tagged_as_free(right)) {
@@ -663,9 +697,9 @@ IRAM_ATTR void cmpct_free(cmpct_heap_t *heap, void *payload)
             header_t *right_right = right_header(right);
             unlink_free_unknown_bucket(heap, (free_t *)right);
             fix_left_size(right_right, header);
-            free_memory(heap, header, header->left_size, size + right->size);
+            free_memory(heap, header, get_left_size(header), size + get_size(right));
         } else {
-            free_memory(heap, header, header->left_size, size);
+            free_memory(heap, header, get_left_size(header), size);
         }
     }
     unlock(heap);
@@ -676,8 +710,8 @@ IRAM_ATTR void cmpct_free(cmpct_heap_t *heap, void *payload)
 IRAM_ATTR static size_t allocation_size(void *payload)
 {
     header_t *header = (header_t *)payload - 1;
-    size_t old_size = header->size - sizeof(header_t);
-    return old_size;
+    size_t size = get_size(header) - sizeof(header_t);
+    return size;
 }
 
 IRAM_ATTR void *cmpct_realloc(cmpct_heap_t *heap, void *payload, size_t size)
@@ -889,7 +923,7 @@ void cmpct_get_info_impl(cmpct_heap_t *heap, multi_heap_info_t *info)
         for (int i = BUCKET_WORDS * 32 - 1; i >= 0; i--) {
             if (find_nonempty_bucket(heap, i) != -1) {
                 free_t *head = heap->free_lists[i];
-                size_t size = head->header.size - sizeof(header_t);
+                size_t size = get_size(&head->header) - sizeof(header_t);
                 if (size <= 128) {
                     // These buckets are precise.
                     info->largest_free_block = size;
