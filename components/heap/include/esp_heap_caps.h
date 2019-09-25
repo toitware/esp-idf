@@ -310,6 +310,29 @@ void heap_caps_dump(uint32_t caps);
  */
 void heap_caps_dump_all();
 
+/**
+ * @brief Set the tag value to be attached to future allocations in this thread.
+ *
+ * @param tag         An opaque piece of data that is attached to allocations
+ */
+void heap_caps_set_thread_tag(void* tag);
+
+/**
+ * @brief Iterate over allocations for this thread that have not yet been freed.
+ *
+ * Each allocation is created with a tag that comes from the last call to
+ * heap_caps_set_thread_tag.  This function calls the callback for each
+ * allocation that is not yet freed and has the given tag.  If the callback
+ * returns true then the allocation is freed, otherwise it is preserved.  The
+ * user_data argument is passed to the callback along with the tag and details
+ * of the memory allocation.
+ *
+ * @param user_data   A value that will be passed to each invocation of the callback.
+ * @param tag         An opaque piece of data that was passed to heap_caps_set_thread_tag.
+ * @param callback    A function to be called for each not-yet-freed memory area with the given tag.
+ */
+void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, tagged_memory_callback_t callback);
+
 #ifdef __cplusplus
 }
 #endif
