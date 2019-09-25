@@ -43,7 +43,7 @@ typedef struct {
     size_t total_blocks;
 } multi_heap_info_t;
 
-#else  // Not testing.
+#else  // TEST_CMPCTMALLOC
 
 #include "xtensa/core-macros.h"
 
@@ -87,7 +87,7 @@ typedef uintptr_t vaddr_t;
 #define dprintf(...) fprintf(__VA_ARGS__)
 #define INFO stdout
 
-#endif  // Not testing.
+#endif  // TEST_CMPCTMALLOC
 
 #define ROUNDUP(x, alignment) (((x) + (alignment) - 1) & ~((alignment) - 1))
 #define IS_ALIGNED(x, alignment) (((x) & ((alignment) - 1)) == 0)
@@ -545,13 +545,12 @@ void cmpct_test_churn(cmpct_heap_t *heap)
 {
     size_t remaining = cmpct_free_size_impl(heap);
     size_t heap_size = heap->size;
-    const int ITERATIONS = 4096;
-    char *allocations[ITERATIONS];
-    for (int i = 0; i < ITERATIONS; i++) {
-        allocations[i] = NULL;
-    }
-    for (int i = 0; i < ITERATIONS; i++) {
-        int free_index = (i + 500) % ITERATIONS;
+    USE(remaining);
+    USE(heap_size);
+#define TEST_ITERATIONS 4096
+    char *allocations[TEST_ITERATIONS] = { NULL };
+    for (int i = 0; i < TEST_ITERATIONS; i++) {
+        int free_index = (i + 500) % TEST_ITERATIONS;
         cmpct_free(heap, allocations[free_index]);
         allocations[free_index] = NULL;
         size_t size = cmpct_test_random_next() & 0xff;
@@ -566,7 +565,7 @@ void cmpct_test_churn(cmpct_heap_t *heap)
             allocations[i][j] = cmpct_test_random_next();
         }
     }
-    for (int i = 0; i < ITERATIONS; i++) {
+    for (int i = 0; i < TEST_ITERATIONS; i++) {
         cmpct_free(heap, allocations[i]);
     }
     ASSERT(remaining == cmpct_free_size_impl(heap));
