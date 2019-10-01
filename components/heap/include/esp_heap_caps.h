@@ -325,7 +325,10 @@ void heap_caps_set_thread_tag(void* tag);
  * allocation that is not yet freed and has the given tag.  If the callback
  * returns true then the allocation is freed, otherwise it is preserved.  The
  * user_data argument is passed to the callback along with the tag and details
- * of the memory allocation.
+ * of the memory allocation.  If the tag is NULL then all allocations will be
+ * iterated, but the callback can filter manually on the tag it is passed.
+ * Note that the callback cannot allocate or deallocate, and this often means it
+ * cannot call printf.
  *
  * @param user_data   A value that will be passed to each invocation of the callback.
  * @param tag         An opaque piece of data that was passed to heap_caps_set_thread_tag.
