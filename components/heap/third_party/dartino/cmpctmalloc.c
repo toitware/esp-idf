@@ -155,7 +155,7 @@ STATIC_ASSERT(HEAP_GROW_SIZE <= (1u << HEAP_ALLOC_VIRTUAL_BITS))
 // All individual memory areas on the heap start with this.
 typedef struct header_struct {
     // This is divided up into two 16 bit fields, size and left_size.  We don't use actual
-    // 16 bit fields because they don't work in iRam, which is 32 bit only.
+    // 16 bit fields because they don't work in IRAM, which is 32 bit only.
     // left_size: Used to find the previous memory area in address order.
     // size: For the next memory area.  Both size fields include the header.
     size_t size_;
@@ -163,32 +163,32 @@ typedef struct header_struct {
 } header_t;
 
 static INLINE size_t get_left_size(header_t* header) {
-  // The mask here should be 0xffff, but that would cause gcc to emit a 16 bit
-  // load. We know the lowest bit of the size (top 16 bits) is always 0 so we
-  // just include it here.
-  return header->size_ & 0x1ffff;
+    // The mask here should be 0xffff, but that would cause gcc to emit a 16 bit
+    // load. We know the lowest bit of the size (top 16 bits) is always 0 so we
+    // just include it here.
+    return header->size_ & 0x1ffff;
 }
 
 static INLINE void set_left_size(header_t* header, size_t size) {
-  ASSERT(size <= 0xffff);
-  header->size_ = (header->size_ & ~0xffff) | size;
+    ASSERT(size <= 0xffff);
+    header->size_ = (header->size_ & ~0xffff) | size;
 }
 
 static INLINE size_t get_size(header_t* header) {
-  size_t field = header->size_;
-  // We should just shift down by 16, but that would cause gcc to emit a 16 bit
-  // load. We know the highest bit of the left_size (bottom 16 bits) is always 0
-  // so we extract that and add it in for no effect.  The expression (field >>
-  // 15) & 1 can be obtained with a single extui instruction.  The more obvious
-  // (field & 0x8000) would require a load of the 0x8000 constant from the
-  // constant pool.
-  return (field >> 16) + ((field >> 15) & 1);
+    size_t field = header->size_;
+    // We should just shift down by 16, but that would cause gcc to emit a 16 bit
+    // load. We know the highest bit of the left_size (bottom 16 bits) is always 0
+    // so we extract that and add it in for no effect.  The expression (field >>
+    // 15) & 1 can be obtained with a single extui instruction.  The more obvious
+    // (field & 0x8000) would require a load of the 0x8000 constant from the
+    // constant pool.
+    return (field >> 16) + ((field >> 15) & 1);
 }
 
 static INLINE void set_size(header_t* header, size_t size) {
-  ASSERT(size <= 0xffff);
-  ASSERT((size & 1) == 0);
-  header->size_ = (header->size_ & 0xffff) | (size << 16);
+    ASSERT(size <= 0xffff);
+    ASSERT((size & 1) == 0);
+    header->size_ = (header->size_ & 0xffff) | (size << 16);
 }
 
 typedef struct free_struct {
@@ -345,7 +345,7 @@ IRAM_ATTR inline static header_t *right_header(header_t *header)
 IRAM_ATTR inline static header_t *left_header(header_t *header)
 {
     // We only need to clear the low bit, but we clear the lowest two, because
-    // otherwise gcc issues 16 bit operations that fail in iram.
+    // otherwise gcc issues 16 bit operations that fail in IRAM.
     return (header_t *)((char *)header - (get_left_size(header) & ~3));
 }
 
@@ -593,7 +593,7 @@ void cmpct_test_churn(cmpct_heap_t *heap)
         // Waste is rather more on 64 bit because the doubly-linked freelist
         // entries are so big.
         if (sizeof(void*) == 4) {
-          ASSERT(cmpct_get_allocated_size_impl(heap, allocations[i]) <= size * 1.06 + sizeof(free_t));
+            ASSERT(cmpct_get_allocated_size_impl(heap, allocations[i]) <= size * 1.06 + sizeof(free_t));
         }
         for (size_t j = 0; j < size; j++) {
             allocations[i][j] = cmpct_test_random_next();
@@ -654,7 +654,7 @@ IRAM_ATTR void *cmpct_alloc(cmpct_heap_t *heap, size_t size)
         create_allocation_header(block, block_size, get_left_size(block));
     heap->allocated_blocks++;
     for (int i = 0; i < rounded_up - sizeof(header_t); i += sizeof(int)) {
-      ((int*)(result))[i >> 2] = 0;
+        ((int*)(result))[i >> 2] = 0;
     }
 #ifdef CMPCT_DEBUG
     memset(result, ALLOC_FILL, size);
@@ -815,7 +815,7 @@ cmpct_heap_t *cmpct_register_impl(void *start, size_t size)
     uintptr_t rest_of_zeroth_page = ROUNDUP(end_of_struct, sizeof(header_t));
     intptr_t waste = start_of_first_page - rest_of_zeroth_page;
     if (waste > sizeof(free_t) * 3) {
-      add_to_heap(page_heap, (void*)rest_of_zeroth_page, waste, NULL);
+        add_to_heap(page_heap, (void*)rest_of_zeroth_page, waste, NULL);
     }
 
     return page_heap;
@@ -968,7 +968,7 @@ IRAM_ATTR static void *page_alloc(cmpct_heap_t *heap, intptr_t pages)
                 }
                 void *result = (void*)(heap->page_base + i * PAGE_SIZE);
                 for (int i = 0; i < pages << PAGE_SIZE_SHIFT; i += sizeof(int)) {
-                  ((int*)(result))[i >> 2] = 0;
+                    ((int*)(result))[i >> 2] = 0;
                 }
                 return (void*)(heap->page_base + i * PAGE_SIZE);
             }
@@ -1003,12 +1003,12 @@ void multi_heap_set_lock(cmpct_heap_t *heap, void *lock)
 #ifdef TEST_CMPCTMALLOC
 
 int main(int argc, char *argv[]) {
-  void *arena = malloc(1234567);
-  cmpct_heap_t *heap = cmpct_register_impl(arena, 1234567);
-  cmpct_test_get_back_newly_freed(heap);
-  for (int i = 0; i < 1000; i++) {
-    cmpct_test_churn(heap);
-  }
+    void *arena = malloc(1234567);
+    cmpct_heap_t *heap = cmpct_register_impl(arena, 1234567);
+    cmpct_test_get_back_newly_freed(heap);
+    for (int i = 0; i < 1000; i++) {
+        cmpct_test_churn(heap);
+    }
 }
 
 #endif
