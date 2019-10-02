@@ -117,7 +117,7 @@ multi_heap_handle_t multi_heap_register(void *start, size_t size);
  * @param heap Handle to a registered heap.
  * @param lock Optional pointer to a locking structure to associate with this heap.
  */
-void multi_heap_set_lock(multi_heap_handle_t heap, void* lock);
+void multi_heap_set_lock(multi_heap_handle_t heap, void *lock);
 
 /** @brief Dump heap information to stdout
  *
@@ -184,6 +184,18 @@ typedef struct {
  * @param info Pointer to a structure to fill with heap metadata.
  */
 void multi_heap_get_info(multi_heap_handle_t heap, multi_heap_info_t *info);
+
+/**
+ * @brief Return true to keep the memory allocation, or false to free it.
+ */
+typedef bool tagged_memory_callback_t(void *user_data, void *tag, void *allocation, size_t allocated_size);
+
+/**
+ * Must be less than FREERTOS_THREAD_LOCAL_STORAGE_POINTERS and not equal to PTHREAD_TLS_INDEX.
+ */
+#define MULTI_HEAP_THREAD_TAG_INDEX 1
+
+void multi_heap_iterate_tagged_memory_areas(multi_heap_handle_t heap, void *user_data, void *tag, tagged_memory_callback_t callback);
 
 #ifdef __cplusplus
 }
