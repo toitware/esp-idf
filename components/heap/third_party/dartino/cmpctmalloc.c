@@ -81,7 +81,17 @@ typedef uintptr_t vaddr_t;
 #define STATIC_ASSERT(condition)
 #define dprintf(...) fprintf(__VA_ARGS__)
 #define INFO stdout
-#define GET_THREAD_LOCAL_TAG pvTaskGetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX)
+
+#ifdef __XTENSA__
+IRAM_ATTR inline static bool in_interrupt_service_routine() {
+    int ps_register;
+    __asm__ __volatile__("rsr.ps %0" : "=a"(ps_register));
+    return (ps_register & 0xf) != 0;
+}
+#define GET_THREAD_LOCAL_TAG (in_interrupt_service_routine() ? NULL : pvTaskGetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX))
+#else
+#define GET_THREAD_LOCAL_TAG (pvTaskGetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX))
+#endif
 
 #endif  // TEST_CMPCTMALLOC
 
