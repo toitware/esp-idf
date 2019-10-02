@@ -313,9 +313,9 @@ void heap_caps_dump_all();
 /**
  * @brief Set the tag value to be attached to future allocations in this thread.
  *
- * @param tag         An opaque piece of data that is attached to allocations
+ * @param tag         An opaque pointer that is attached to allocations.
  */
-void heap_caps_set_thread_tag(void* tag);
+void heap_caps_set_thread_tag(void *tag);
 
 /**
  * @brief Iterate over allocations for this thread that have not yet been freed.
