@@ -16,6 +16,10 @@
 #include <assert.h>
 #include <stdio.h>
 #include <sys/param.h>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "multi_heap.h"
@@ -351,6 +355,20 @@ size_t heap_caps_get_minimum_free_size( uint32_t caps )
         }
     }
     return ret;
+}
+
+void heap_caps_set_thread_tag(void* tag)
+{
+    assert(MULTI_HEAP_THREAD_TAG_INDEX < configNUM_THREAD_LOCAL_STORAGE_POINTERS);
+    vTaskSetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX, tag);
+}
+
+void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, tagged_memory_callback_t callback)
+{
+    heap_t *heap;
+    SLIST_FOREACH(heap, &registered_heaps, next) {
+        multi_heap_iterate_tagged_memory_areas(heap->heap, user_data, tag, callback);
+    }
 }
 
 size_t heap_caps_get_largest_free_block( uint32_t caps )
