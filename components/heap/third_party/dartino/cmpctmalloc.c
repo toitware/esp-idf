@@ -83,7 +83,12 @@ typedef uintptr_t vaddr_t;
 #define INFO stdout
 
 #ifdef __XTENSA__
-#define GET_THREAD_LOCAL_TAG (currently_in_interrupt_service_routine() ? NULL : pvTaskGetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX))
+IRAM_ATTR inline static bool in_interrupt_service_routine() {
+    int ps_register;
+    __asm__ __volatile__("rsr.ps %0" : "=a"(ps_register));
+    return (ps_register & 0xf) != 0;
+}
+#define GET_THREAD_LOCAL_TAG (in_interrupt_service_routine() ? NULL : pvTaskGetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX))
 #else
 #define GET_THREAD_LOCAL_TAG (pvTaskGetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX))
 #endif
@@ -241,15 +246,6 @@ struct multi_heap_info {
 };
 
 static ssize_t heap_grow(cmpct_heap_t *heap, free_t **bucket);
-
-#ifdef __XTENSA__
-IRAM_ATTR inline static bool currently_in_interrupt_service_routine() {
-    int ps_register;
-    __asm__ __volatile__("rsr.ps %0" : "=a"(ps_register));
-    return (ps_register & 0xf) != 0;
-}
-#endif
-
 
 IRAM_ATTR static void lock(cmpct_heap_t *heap)
 {
