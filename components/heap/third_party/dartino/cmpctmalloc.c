@@ -67,6 +67,9 @@ size_t multi_heap_free_size(cmpct_heap_t *heap)
 size_t multi_heap_minimum_free_size(cmpct_heap_t *heap)
     __attribute__((alias("cmpct_minimum_free_size_impl")));
 
+void multi_heap_set_thread_tag(void *tag)
+    __attribute__((alias("cmpct_set_thread_tag")));
+
 void multi_heap_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void *tag, tagged_memory_callback_t callback)
     __attribute__((alias("cmpct_iterate_tagged_memory_areas")));
 
@@ -88,7 +91,11 @@ IRAM_ATTR inline static bool in_interrupt_service_routine() {
     __asm__ __volatile__("rsr.ps %0" : "=a"(ps_register));
     return (ps_register & 0xf) != 0;
 }
-#define GET_THREAD_LOCAL_TAG (in_interrupt_service_routine() ? NULL : pvTaskGetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX))
+
+static int first_allocations = true;
+
+// First allocation is too early in the boot process to get a thread local data, so we skip that.
+#define GET_THREAD_LOCAL_TAG ((in_interrupt_service_routine() || first_allocations) ? NULL : pvTaskGetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX))
 #else
 #define GET_THREAD_LOCAL_TAG (pvTaskGetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX))
 #endif
@@ -1205,6 +1212,13 @@ IRAM_ATTR static void page_free(cmpct_heap_t *heap, void *address, int page_coun
 void multi_heap_set_lock(cmpct_heap_t *heap, void *lock)
 {
     heap->lock = lock;
+}
+
+void cmpct_set_thread_tag(void* tag)
+{
+    first_allocations = false;
+    assert(MULTI_HEAP_THREAD_TAG_INDEX < configNUM_THREAD_LOCAL_STORAGE_POINTERS);
+    vTaskSetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX, tag);
 }
 
 void cmpct_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void *tag, tagged_memory_callback_t callback)
