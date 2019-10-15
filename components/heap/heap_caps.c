@@ -359,8 +359,7 @@ size_t heap_caps_get_minimum_free_size( uint32_t caps )
 
 void heap_caps_set_thread_tag(void* tag)
 {
-    assert(MULTI_HEAP_THREAD_TAG_INDEX < configNUM_THREAD_LOCAL_STORAGE_POINTERS);
-    vTaskSetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX, tag);
+    multi_heap_set_thread_tag(tag);
 }
 
 void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, tagged_memory_callback_t callback)
