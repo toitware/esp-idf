@@ -5,15 +5,14 @@ if(NOT CONFIG_ESP32_NO_BLOBS)
 endif()
 
 idf_component_register(SRCS "src/coexist.c"
-                            "src/crypto_ops.c"
                             "src/lib_printf.c"
                             "src/mesh_event.c"
                             "src/phy_init.c"
-                            "src/restore.c"
                             "src/smartconfig.c"
+                            "src/smartconfig_ack.c"
                             "src/wifi_init.c"
                     INCLUDE_DIRS "include" "${idf_target}/include"
-                    PRIV_REQUIRES wpa_supplicant nvs_flash smartconfig_ack
+                    PRIV_REQUIRES wpa_supplicant nvs_flash
                     LDFRAGMENTS "${ldfragments}")
 
 idf_build_get_property(build_dir BUILD_DIR)
