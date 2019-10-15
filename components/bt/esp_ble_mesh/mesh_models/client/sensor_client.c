@@ -17,6 +17,7 @@
 #include <stdbool.h>
 
 #include "osi/allocator.h"
+#include "osi/mutex.h"
 #include "sdkconfig.h"
 
 #include "mesh_types.h"
@@ -57,6 +58,28 @@ static const bt_mesh_client_op_pair_t sensor_op_pair[] = {
     { BLE_MESH_MODEL_OP_SENSOR_SERIES_GET,     BLE_MESH_MODEL_OP_SENSOR_SERIES_STATUS     },
 };
 
+static osi_mutex_t sensor_client_mutex;
+
+static void bt_mesh_sensor_client_mutex_new(void)
+{
+    static bool init;
+
+    if (!init) {
+        osi_mutex_new(&sensor_client_mutex);
+        init = true;
+    }
+}
+
+static void bt_mesh_sensor_client_lock(void)
+{
+    osi_mutex_lock(&sensor_client_mutex, OSI_MUTEX_MAX_TIMEOUT);
+}
+
+static void bt_mesh_sensor_client_unlock(void)
+{
+    osi_mutex_unlock(&sensor_client_mutex);
+}
+
 static void timeout_handler(struct k_work *work)
 {
     sensor_internal_data_t *internal = NULL;
@@ -83,10 +106,16 @@ static void timeout_handler(struct k_work *work)
         return;
     }
 
-    bt_mesh_callback_sensor_status_to_btc(node->opcode, 0x03, node->ctx.model,
-                                          &node->ctx, NULL, 0);
+    bt_mesh_sensor_client_lock();
 
-    bt_mesh_client_free_node(&internal->queue, node);
+    if (!k_delayed_work_free(&node->timer)) {
+        bt_mesh_sensor_client_cb_evt_to_btc(node->opcode,
+            BTC_BLE_MESH_EVT_SENSOR_CLIENT_TIMEOUT, node->ctx.model, &node->ctx, NULL, 0);
+        // Don't forget to release the node at the end.
+        bt_mesh_client_free_node(&internal->queue, node);
+    }
+
+    bt_mesh_sensor_client_unlock();
 
     return;
 }
@@ -262,7 +291,10 @@ static void sensor_status(struct bt_mesh_model *model,
 
     buf->data = val;
     buf->len  = len;
-    node = bt_mesh_is_model_message_publish(model, ctx, buf, true);
+
+    bt_mesh_sensor_client_lock();
+
+    node = bt_mesh_is_client_recv_publish_msg(model, ctx, buf, true);
     if (!node) {
         BT_DBG("Unexpected sensor status message 0x%x", rsp);
     } else {
@@ -274,20 +306,24 @@ static void sensor_status(struct bt_mesh_model *model,
         case BLE_MESH_MODEL_OP_SENSOR_GET:
         case BLE_MESH_MODEL_OP_SENSOR_COLUMN_GET:
         case BLE_MESH_MODEL_OP_SENSOR_SERIES_GET:
-            evt = 0x00;
+            evt = BTC_BLE_MESH_EVT_SENSOR_CLIENT_GET_STATE;
             break;
         case BLE_MESH_MODEL_OP_SENSOR_CADENCE_SET:
         case BLE_MESH_MODEL_OP_SENSOR_SETTING_SET:
-            evt = 0x01;
+            evt = BTC_BLE_MESH_EVT_SENSOR_CLIENT_SET_STATE;
             break;
         default:
             break;
         }
 
-        bt_mesh_callback_sensor_status_to_btc(node->opcode, evt, model, ctx, val, len);
-        // Don't forget to release the node at the end.
-        bt_mesh_client_free_node(&internal->queue, node);
+        if (!k_delayed_work_free(&node->timer)) {
+            bt_mesh_sensor_client_cb_evt_to_btc(node->opcode, evt, model, ctx, val, len);
+            // Don't forget to release the node at the end.
+            bt_mesh_client_free_node(&internal->queue, node);
+        }
     }
+
+    bt_mesh_sensor_client_unlock();
 
     switch (rsp) {
     case BLE_MESH_MODEL_OP_SENSOR_DESCRIPTOR_STATUS: {
@@ -352,7 +388,7 @@ const struct bt_mesh_model_op sensor_cli_op[] = {
     BLE_MESH_MODEL_OP_END,
 };
 
-static int sensor_act_state(struct bt_mesh_common_param *common,
+static int sensor_act_state(bt_mesh_client_common_param_t *common,
                             void *value, u16_t value_len, bool need_ack)
 {
     struct net_buf_simple *msg = NULL;
@@ -460,7 +496,7 @@ end:
     return err;
 }
 
-int bt_mesh_sensor_client_get_state(struct bt_mesh_common_param *common, void *get, void *status)
+int bt_mesh_sensor_client_get_state(bt_mesh_client_common_param_t *common, void *get, void *status)
 {
     bt_mesh_sensor_client_t *client = NULL;
     u16_t length = 0;
@@ -525,7 +561,7 @@ int bt_mesh_sensor_client_get_state(struct bt_mesh_common_param *common, void *g
     return sensor_act_state(common, get, length, true);
 }
 
-int bt_mesh_sensor_client_set_state(struct bt_mesh_common_param *common, void *set, void *status)
+int bt_mesh_sensor_client_set_state(bt_mesh_client_common_param_t *common, void *set, void *status)
 {
     bt_mesh_sensor_client_t *client = NULL;
     u16_t length = 0;
@@ -611,6 +647,8 @@ int bt_mesh_sensor_cli_init(struct bt_mesh_model *model, bool primary)
     client->op_pair_size = ARRAY_SIZE(sensor_op_pair);
     client->op_pair = sensor_op_pair;
     client->internal_data = internal;
+
+    bt_mesh_sensor_client_mutex_new();
 
     return 0;
 }

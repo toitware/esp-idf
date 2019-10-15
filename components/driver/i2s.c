@@ -886,12 +886,6 @@ static esp_err_t i2s_param_config(i2s_port_t i2s_num, const i2s_config_t *i2s_co
     I2S_CHECK(!((i2s_config->mode & I2S_MODE_DAC_BUILT_IN) && (i2s_num != I2S_NUM_0)), "I2S DAC built-in only support on I2S0", ESP_ERR_INVALID_ARG);
     I2S_CHECK(!((i2s_config->mode & I2S_MODE_PDM) && (i2s_num != I2S_NUM_0)), "I2S DAC PDM only support on I2S0", ESP_ERR_INVALID_ARG);
 
-    if (i2s_num == I2S_NUM_1) {
-        periph_module_enable(PERIPH_I2S1_MODULE);
-    } else {
-        periph_module_enable(PERIPH_I2S0_MODULE);
-    }
-
     if(i2s_config->mode & I2S_MODE_ADC_BUILT_IN) {
         //in ADC built-in mode, we need to call i2s_set_adc_mode to
         //initialize the specific ADC channel.
@@ -1099,8 +1093,10 @@ esp_err_t i2s_driver_install(i2s_port_t i2s_num, const i2s_config_t *i2s_config,
 
         //To make sure hardware is enabled before any hardware register operations.
         if (i2s_num == I2S_NUM_1) {
+            periph_module_reset(PERIPH_I2S1_MODULE);
             periph_module_enable(PERIPH_I2S1_MODULE);
         } else {
+            periph_module_reset(PERIPH_I2S0_MODULE);
             periph_module_enable(PERIPH_I2S0_MODULE);
         }
 
@@ -1182,18 +1178,6 @@ esp_err_t i2s_driver_uninstall(i2s_port_t i2s_num)
         periph_module_disable(PERIPH_I2S1_MODULE);
     }
     return ESP_OK;
-}
-
-int i2s_write_bytes(i2s_port_t i2s_num, const void *src, size_t size, TickType_t ticks_to_wait)
-{
-    size_t bytes_written = 0;
-    int res = 0;
-    res = i2s_write(i2s_num, src, size, &bytes_written, ticks_to_wait);
-    if (res != ESP_OK) {
-        return ESP_FAIL;
-    } else {
-        return bytes_written;
-    }
 }
 
 esp_err_t i2s_write(i2s_port_t i2s_num, const void *src, size_t size, size_t *bytes_written, TickType_t ticks_to_wait)
@@ -1321,18 +1305,6 @@ esp_err_t i2s_write_expand(i2s_port_t i2s_num, const void *src, size_t size, siz
     return ESP_OK;
 }
 
-int i2s_read_bytes(i2s_port_t i2s_num, void *dest, size_t size, TickType_t ticks_to_wait)
-{
-    size_t bytes_read = 0;
-    int res = 0;
-    res = i2s_read(i2s_num, dest, size, &bytes_read, ticks_to_wait);
-    if (res != ESP_OK) {
-        return ESP_FAIL;
-    } else {
-        return bytes_read;
-    }
-}
-
 esp_err_t i2s_read(i2s_port_t i2s_num, void *dest, size_t size, size_t *bytes_read, TickType_t ticks_to_wait)
 {
     char *data_ptr, *dest_byte;
@@ -1370,30 +1342,4 @@ esp_err_t i2s_read(i2s_port_t i2s_num, void *dest, size_t size, size_t *bytes_re
 #endif
     xSemaphoreGive(p_i2s_obj[i2s_num]->rx->mux);
     return ESP_OK;
-}
-
-int i2s_push_sample(i2s_port_t i2s_num, const void *sample, TickType_t ticks_to_wait)
-{
-    size_t bytes_push = 0;
-    int res = 0;
-    I2S_CHECK((i2s_num < I2S_NUM_MAX), "i2s_num error", ESP_FAIL);
-    res = i2s_write(i2s_num, sample, p_i2s_obj[i2s_num]->bytes_per_sample, &bytes_push, ticks_to_wait);
-    if (res != ESP_OK) {
-        return ESP_FAIL;
-    } else {
-        return bytes_push;
-    }
-}
-
-int i2s_pop_sample(i2s_port_t i2s_num, void *sample, TickType_t ticks_to_wait)
-{
-    size_t bytes_pop = 0;
-    int res = 0;
-    I2S_CHECK((i2s_num < I2S_NUM_MAX), "i2s_num error", ESP_FAIL);
-    res = i2s_read(i2s_num, sample, p_i2s_obj[i2s_num]->bytes_per_sample, &bytes_pop, ticks_to_wait);
-    if (res != ESP_OK) {
-        return ESP_FAIL;
-    } else {
-        return bytes_pop;
-    }
 }
