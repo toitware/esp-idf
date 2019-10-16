@@ -32,6 +32,10 @@ ASSERT((CONFIG_ESP32_FIXED_STATIC_RAM_SIZE <= 0x2c200),
 #define DRAM0_0_SEG_LEN 0x2c200
 #endif
 
+#ifndef CONFIG_BOOTLOADER_RESERVE_RTC
+#define CONFIG_BOOTLOADER_RESERVE_RTC 0
+#endif
+
 MEMORY
 {
   /* All these values assume the flash cache is on, and have the blocks this uses subtracted from the length
@@ -39,11 +43,11 @@ MEMORY
   are connected to the data port of the CPU and eg allow bytewise access. */
 
   /* IRAM for PRO cpu. Not sure if happy with this, this is MMU area... */
-  iram0_0_seg (RX) :                 org = 0x40080000, len = 0x20000
+  iram0_0_seg (RX) :                 org = 0x40080000, len = 0x20000-CONFIG_BOOTLOADER_RESERVE_RTC
 
   /* Even though the segment name is iram, it is actually mapped to flash
   */
-  iram0_2_seg (RX) :                 org = 0x400D0018, len = 0x330000-0x18
+  iram0_2_seg (RX) :                 org = 0x400D0018, len = 0x330000-0x18-CONFIG_BOOTLOADER_RESERVE_RTC
 
   /*
     (0x18 offset above is a convenience for the app binary image generation. Flash cache has 64KB pages. The .bin file
