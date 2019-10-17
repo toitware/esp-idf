@@ -438,10 +438,12 @@ void start_cpu0_default(void)
 #if !CONFIG_SPIRAM_BOOT_INIT
     // Read the application binary image header. This will also decrypt the header if the image is encrypted.
     esp_image_header_t fhdr = {0};
-    // This assumes that DROM is the first segment in the application binary, i.e. that we can read
-    // the binary header through cache by accessing SOC_DROM_LOW address.
-    memcpy(&fhdr, (void*) SOC_DROM_LOW, sizeof(fhdr));
-    // If psram is uninitialized, we need to improve some flash configuration.
+    const esp_partition_t *partition = esp_ota_get_running_partition();
+    esp_partition_read(partition, 0, &fhdr, sizeof(esp_image_header_t));
+
+    assert(fhdr.magic == ESP_IMAGE_HEADER_MAGIC);
+
+    // When psram is uninitialized, we need to improve some flash configuration.
     bootloader_flash_clock_config(&fhdr);
     bootloader_flash_gpio_config(&fhdr);
     bootloader_flash_dummy_config(&fhdr);
