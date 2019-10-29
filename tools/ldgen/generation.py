@@ -73,7 +73,7 @@ class PlacementRule():
                     self.sections[section] = metadata
 
     def get_section_names(self):
-        return self.sections.keys()
+        return sorted(self.sections.keys())
 
     def add_exclusion(self, other, sections_infos=None):
         # Utility functions for this method
@@ -169,7 +169,8 @@ class PlacementRule():
             exclusion_string = None
 
             if exclusions:
-                exclusion_string = " ".join(map(lambda e: "*" + e.archive + (":" + e.obj + ".*" if e.obj else ""), exclusions))
+                sorted_exclusions = sorted(exclusions, key=str)
+                exclusion_string = " ".join(map(lambda e: "*" + e.archive + (":" + e.obj + ".*" if e.obj else ""), sorted_exclusions))
                 exclusion_string = "EXCLUDE_FILE(" + exclusion_string + ")"
             else:
                 exclusion_string = ""
@@ -181,7 +182,7 @@ class PlacementRule():
             section_expanded = self.sections[section].expanded.content
 
             if section_expansions and section_expanded:
-                section_string = " ".join(section_expansions)
+                section_string = " ".join(sorted(section_expansions, key=str))
                 exclusion_section_string = section_string
             else:
                 section_string = section
@@ -189,7 +190,7 @@ class PlacementRule():
 
             sections_string.append(exclusion_section_string)
 
-        sections_string = " ".join(sections_string)
+        sections_string = " ".join(sorted(sections_string, key=str))
 
         archive = str(self.archive) if self.archive else ""
         obj = (str(self.obj) + (".*" if self.obj else "")) if self.obj else ""
@@ -265,7 +266,7 @@ class GenerationModel:
 
         sections_bucket = temp_dict[scheme_name]
 
-        for (target, sections) in sections_bucket.items():
+        for (target, sections) in sorted(sections_bucket.items()):
             section_entries = []
 
             for section in sections:
@@ -333,7 +334,8 @@ class GenerationModel:
         all_mapping_rules = collections.defaultdict(list)
 
         # Generate rules based on mapping fragments
-        for mapping in self.mappings.values():
+        for mapping in sorted(self.mappings.values(), key=str):
+            print mapping.archive
             archive = mapping.archive
             mapping_rules = all_mapping_rules[archive]
             for (obj, symbol, scheme_name) in mapping.entries:
@@ -509,7 +511,7 @@ class TemplateModel:
                 self.members.append(line)
 
     def fill(self, mapping_rules):
-        for member in self.members:
+        for member in sorted(self.members, key=str):
             target = None
             try:
                 target = member.target
@@ -517,7 +519,7 @@ class TemplateModel:
 
                 del rules[:]
 
-                rules.extend(mapping_rules[target])
+                rules.extend(sorted(mapping_rules[target], key=str))
             except KeyError:
                 message = GenerationException.UNDEFINED_REFERENCE + " to target '" + target + "'."
                 raise GenerationException(message)
