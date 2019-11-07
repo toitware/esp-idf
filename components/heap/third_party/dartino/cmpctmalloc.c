@@ -217,11 +217,16 @@ typedef struct free_struct {
     struct free_struct *prev;
 } free_t;
 
+typedef enum {
+  PAGE_FREE = 0,
+  PAGE_IN_USE = 1,    // Page is first in an allocation.
+  PAGE_CONTINUED = 2  // Page is subsequent in an allocation.
+} page_use_t;
+
 // For page allocator, not originally part of cmpctmalloc.  These fields are 32 bit
 // so that they work in IRAM on ESP32.
 typedef struct Page {
-    uint32_t continued;  // Boolean - this is part 2 or more of a series of pages.
-    uint32_t in_use;     // Boolean.
+    uint32_t status;
     void *tag;           // Used for the pointer set by the user with heap_caps_set_thread_tag.
 } Page;
 
@@ -491,6 +496,7 @@ IRAM_ATTR static void free_memory(cmpct_heap_t *heap, header_t *header, size_t l
     // aligned areas that we give to the allocator are not returned to the page
     // allocator, which cannot handle them.
     if (IS_PAGE_ALIGNED((uintptr_t)left - sizeof(arena_t)) &&
+        IS_PAGE_ALIGNED((uintptr_t)right + sizeof(header_t)) &&
             is_start_of_page_allocation(left) &&
             is_end_of_page_allocation(right)) {
         // The entire page was free and can be returned to the page allocator.
@@ -892,8 +898,13 @@ IRAM_ATTR void *cmpct_realloc(cmpct_heap_t *heap, void *payload, size_t size)
     return new_payload;
 }
 
+// Each allocation area has an arena structure at the start to link them
+// together and a sentinel at either end that is the size of one header.
+static const size_t arena_overhead = 2 * sizeof(header_t) + sizeof(arena_t);
+
 IRAM_ATTR static void add_to_heap(cmpct_heap_t *heap, void *new_area, size_t size, free_t **bucket)
 {
+    heap->size += size;
     void *top = (char *)new_area + size;
     arena_t *new_arena = (arena_t *)new_area;
     // Link into doubly linked list.
@@ -907,7 +918,7 @@ IRAM_ATTR static void add_to_heap(cmpct_heap_t *heap, void *new_area, size_t siz
     // Not free, stops attempts to coalesce left.
     create_allocation_header(left_sentinel, sizeof(header_t), 0, NULL);
     header_t *new_header = left_sentinel + 1;
-    size_t free_size = size - 2 * sizeof(header_t) - sizeof(arena_t);
+    size_t free_size = size - arena_overhead;
     create_free_area(heap, new_header, sizeof(header_t), free_size, bucket);
     header_t *right_sentinel = (header_t *)(top - sizeof(header_t));
     // Not free, stops attempts to coalesce right.
@@ -923,7 +934,6 @@ IRAM_ATTR static ssize_t heap_grow(cmpct_heap_t *heap, free_t **bucket)
     // itself so that it won't match any allocation tag used by the program.
     void *ptr = page_alloc(heap, 1, heap);
     if (ptr == NULL) return -1;
-    heap->size += PAGE_SIZE;
     LTRACEF("growing heap by 0x%zx bytes, new ptr %p\n", size, ptr);
     add_to_heap(heap, ptr, PAGE_SIZE, bucket);
     return PAGE_SIZE;
@@ -943,6 +953,7 @@ void cmpct_init(cmpct_heap_t *heap)
 
     heap->lock = NULL;
     heap->remaining = 0;
+    heap->size = 0;
     heap->free_blocks = 0;
     heap->allocated_blocks = 0;
     // Empty doubly linked list points to itself.
@@ -953,8 +964,7 @@ void cmpct_init(cmpct_heap_t *heap)
 // Takes a memory area for a heap.  The first part of the memory that was given
 // is used for an instance of cmpct_heap_t with the bookkeeping information for
 // the heap.  The whole pages are added to the page allocator for this heap.
-// Any space left after the whole pages is wasted, but space between the
-// cmpct_heap_t and the first page is put on the freelist.  It will never be
+// Space that is not page-aligned is put on the freelist.  It will never be
 // returned to the freelist because only page aligned free entries trigger the
 // code that detects wholly empty pages and returns them to the page allocator.
 cmpct_heap_t *cmpct_register_impl(void *start, size_t size)
@@ -967,8 +977,8 @@ cmpct_heap_t *cmpct_register_impl(void *start, size_t size)
 
     uintptr_t start_int = (uintptr_t)start;
     intptr_t header_waste = ROUNDUP(start_int, sizeof(header_t)) - start_int;
+    uintptr_t end_int = (uintptr_t)start + size;
     start_int += header_waste;
-    uintptr_t end_int = (uintptr_t)start + size - header_waste;
     uintptr_t end_of_struct = start_int + sizeof(cmpct_heap_t) + pages * sizeof(Page);
     ASSERT(end_of_struct < end_int);
     uintptr_t start_of_first_page = ROUNDUP(end_of_struct, PAGE_SIZE);
@@ -982,23 +992,30 @@ cmpct_heap_t *cmpct_register_impl(void *start, size_t size)
     page_heap->number_of_pages = pages;
     page_heap->page_base = (char *)start_of_first_page;
     for (size_t i = 0; i < pages; i++) {
-        page_heap->pages[i].continued = 0;
-        page_heap->pages[i].in_use = 0;
+        page_heap->pages[i].status = PAGE_FREE;
         page_heap->pages[i].tag = NULL;
     }
     // A sentinel page is in_use, but not a continuation of any previous
     // allocation.  This is just in the index, we don't actually waste a page
     // on this.
-    page_heap->pages[pages].continued = 0;
-    page_heap->pages[pages].in_use = 1;
+    page_heap->pages[pages].status = PAGE_IN_USE;
     page_heap->pages[pages].tag = NULL;
 
     cmpct_init(page_heap);
 
     uintptr_t rest_of_zeroth_page = ROUNDUP(end_of_struct, sizeof(header_t));
-    intptr_t waste = start_of_first_page - rest_of_zeroth_page;
-    if (waste > sizeof(arena_t) + sizeof(free_t) * 3) {
-        add_to_heap(page_heap, (void *)rest_of_zeroth_page, waste, NULL);
+    // Unaligned memory before the start of the first page is added to the
+    // heap for small allocations.
+    intptr_t rest = start_of_first_page - rest_of_zeroth_page;
+    if (rest > arena_overhead + sizeof(free_t)) {
+        add_to_heap(page_heap, (void *)rest_of_zeroth_page, rest, NULL);
+    }
+    // Unaligned memory after the end of the last page can also be added to
+    // the heap for small allocations.
+    size_t end_of_last_page = start_of_first_page + PAGE_SIZE * pages;
+    rest = end_int - end_of_last_page;
+    if (rest > arena_overhead + sizeof(free_t)) {
+        add_to_heap(page_heap, (void *)end_of_last_page, rest, NULL);
     }
 
     return page_heap;
@@ -1009,10 +1026,9 @@ IRAM_ATTR void *cmpct_malloc_impl(cmpct_heap_t *heap, size_t size)
     if (size <= SMALL_ALLOCATION_LIMIT) {
         // The SMALL_ALLOCATION_LIMIT is determined by the biggest bucket, but
         // we also need to ensure the largest possible in-page space is large
-        // enough.  A page has a header (the arena_t), and two sentinel headers
-        // (either end).  In addition there is a header for the allocation,
-        // making three in all.
-        ASSERT(SMALL_ALLOCATION_LIMIT <= PAGE_SIZE - sizeof(arena_t) - 3 * sizeof(header_t));
+        // enough.  A page has a given overhead, and a single almost-page-filling
+        // allocation also needs a header.
+        ASSERT(SMALL_ALLOCATION_LIMIT <= PAGE_SIZE - arena_overhead + sizeof(header_t));
         return cmpct_alloc(heap, size);
     }
     lock(heap);
@@ -1044,8 +1060,7 @@ IRAM_ATTR static size_t page_number(cmpct_heap_t *heap, void *p)
     size_t offset = (char *)p - heap->page_base;
     ASSERT(is_page_allocated(p));
     size_t page = offset >> PAGE_SIZE_SHIFT;
-    ASSERT(heap->pages[page].in_use == 1);
-    ASSERT(heap->pages[page].continued == 0);
+    ASSERT(heap->pages[page].status == PAGE_IN_USE);
     return page;
 }
 
@@ -1058,7 +1073,7 @@ IRAM_ATTR size_t cmpct_get_allocated_size_impl(cmpct_heap_t *heap, void *p)
     }
     size_t page = page_number(heap, p);
     for (size_t i = 1; true; i++) {
-        if (!heap->pages[page + i].continued) return i << PAGE_SIZE_SHIFT;
+        if (heap->pages[page + i].status != PAGE_CONTINUED) return i << PAGE_SIZE_SHIFT;
     }
 }
 
@@ -1085,25 +1100,47 @@ size_t cmpct_free_size_impl(cmpct_heap_t *heap)
 
 void cmpct_get_info_impl(cmpct_heap_t *heap, multi_heap_info_t *info)
 {
+    lock(heap);
+
     info->total_free_bytes = heap->remaining;
-    info->total_allocated_bytes = heap->size - heap->remaining;
+    // Subtract the two end sentinels and the free list header that are always
+    // the minimum that is taken by the heap.
+    info->total_allocated_bytes = heap->size - heap->remaining - 3 * sizeof(header_t);
     info->largest_free_block = 0;
     // TODO: We don't currently keep track of the all-time low number of free
     // bytes.
     info->minimum_free_bytes = 0;
     info->allocated_blocks = heap->allocated_blocks;
     info->free_blocks = heap->free_blocks;
-    info->total_blocks = heap->free_blocks + heap->allocated_blocks;
     size_t current_page_run = 0;
+    page_use_t current_status = PAGE_FREE;
+    void *current_tag = NULL;
     // Include sentinel in iteration.
     for (size_t i = 0; i <= heap->number_of_pages; i++) {
-        if (heap->pages[i].in_use) {
-            if (current_page_run > info->largest_free_block) {
-                info->largest_free_block = current_page_run;
-            }
-            current_page_run = 0;
+        if (heap->pages[i].status == current_status && i != heap->number_of_pages) {
+          current_page_run += PAGE_SIZE;
         } else {
-            current_page_run += PAGE_SIZE;
+          if (current_status == PAGE_FREE) {
+            info->total_free_bytes += current_page_run;
+            if (current_page_run != 0) {
+              info->free_blocks++;
+              if (current_page_run > info->largest_free_block) {
+                info->largest_free_block = current_page_run;
+              }
+            }
+          } else {
+            if (current_tag != heap) {  // Pages used for the sub-page allocator are self-tagged.
+              info->total_allocated_bytes += current_page_run;
+              if (current_page_run != 0) info->allocated_blocks++;
+            }
+          }
+          if (heap->pages[i].status == PAGE_FREE) {
+            current_status = PAGE_FREE;
+          } else {
+            current_status = PAGE_CONTINUED;
+            current_tag = heap->pages[i].tag;
+          }
+          current_page_run = PAGE_SIZE;
         }
     }
     if (info->largest_free_block == 0) {
@@ -1126,6 +1163,8 @@ void cmpct_get_info_impl(cmpct_heap_t *heap, multi_heap_info_t *info)
             }
         }
     }
+    info->total_blocks = info->free_blocks + info->allocated_blocks;
+    unlock(heap);
 }
 
 size_t cmpct_minimum_free_size_impl(cmpct_heap_t *heap)
@@ -1139,22 +1178,20 @@ size_t cmpct_minimum_free_size_impl(cmpct_heap_t *heap)
 IRAM_ATTR static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, void *tag)
 {
     for (int i = 0; i <= heap->number_of_pages - pages; i++) {
-        if (!heap->pages[i].in_use) {
+        if (heap->pages[i].status == PAGE_FREE) {
             bool big_enough = true;
             for (int j = 1; j < pages; j++) {
-                if (heap->pages[i + j].in_use) {
+                if (heap->pages[i + j].status != PAGE_FREE) {
                     big_enough = false;
                     i += j;
                     break;
                 }
             }
             if (big_enough) {
-                heap->pages[i].in_use = 1;
+                heap->pages[i].status = PAGE_IN_USE;
                 heap->pages[i].tag = tag;
-                ASSERT(heap->pages[i].continued == 0);
                 for (int j = 1; j < pages; j++) {
-                    heap->pages[i + j].in_use = 1;
-                    heap->pages[i + j].continued = 1;
+                    heap->pages[i + j].status = PAGE_CONTINUED;
                 }
                 void *result = heap->page_base + i * PAGE_SIZE;
                 for (int i = 0; i < pages << PAGE_SIZE_SHIFT; i += sizeof(int)) {
@@ -1170,13 +1207,13 @@ IRAM_ATTR static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, void *tag)
 IRAM_ATTR static void page_iterate(cmpct_heap_t *heap, void *user_data, void *tag, tagged_memory_callback_t callback)
 {
     for (int i = 0; i < heap->number_of_pages; i++) {
-        if (heap->pages[i].in_use && !heap->pages[i].continued) {
+        if (heap->pages[i].status == PAGE_IN_USE) {
             // A null tag indicates that we should iterate over all allocations, but we still
             // don't iterate over the page allocations that the sub-page allocator made.
             if (heap->pages[i].tag == tag || (tag == NULL && heap->pages[i].tag != heap)) {
                 for (int j = 1; true; j++) {
                     ASSERT(i + j <= heap->number_of_pages);
-                    if (!heap->pages[i + j].continued) {
+                    if (heap->pages[i + j].status != PAGE_CONTINUED) {
                         void *allocation = heap->page_base + i * PAGE_SIZE;
                         if (callback(user_data, heap->pages[i].tag, allocation, j * PAGE_SIZE)) {
                             // Callback indicates we should free the memory.
@@ -1198,15 +1235,13 @@ IRAM_ATTR static void page_iterate(cmpct_heap_t *heap, void *user_data, void *ta
 IRAM_ATTR static void page_free(cmpct_heap_t *heap, void *address, int page_count_dummy)
 {
     size_t page = page_number(heap, address);
-    if (page >= heap->number_of_pages || !heap->pages[page].in_use || heap->pages[page].continued) {
+    if (page >= heap->number_of_pages || heap->pages[page].status != PAGE_IN_USE) {
         FATAL("Invalid free");
     }
-    for (intptr_t j = page + 1; heap->pages[j].continued; j++) {
-        heap->pages[j].in_use = 0;
-        heap->pages[j].continued = 0;
+    for (intptr_t j = page + 1; heap->pages[j].status == PAGE_CONTINUED; j++) {
+        heap->pages[j].status = PAGE_FREE;
     }
-    heap->pages[page].in_use = 0;
-    heap->pages[page].continued = 0;
+    heap->pages[page].status = PAGE_FREE;
 }
 
 void multi_heap_set_lock(cmpct_heap_t *heap, void *lock)
