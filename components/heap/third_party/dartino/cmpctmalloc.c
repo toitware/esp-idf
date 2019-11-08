@@ -328,7 +328,7 @@ IRAM_ATTR static int size_to_index_helper(
     // every 32 up to 512 etc.  This can be thought of as rows of 8 buckets.
     // We use the compiler intrinsic count-leading-zeros to find the bucket.
     // Eg. 128-255 has 24 leading zeros and we want row to be 4.
-    unsigned row = sizeof(size_t) * (8 - 4) - __builtin_clzl(size);
+    unsigned row = sizeof(size_t) * 8 - (4 + __builtin_clzl(size));
     // For row 4 we want to shift down 4 bits.
     unsigned column = (size >> row) & 7;
     int row_column = (row << 3) | column;
@@ -497,8 +497,8 @@ IRAM_ATTR static void free_memory(cmpct_heap_t *heap, header_t *header, size_t l
     // allocator, which cannot handle them.
     if (IS_PAGE_ALIGNED((uintptr_t)left - sizeof(arena_t)) &&
         IS_PAGE_ALIGNED((uintptr_t)right + sizeof(header_t)) &&
-            is_start_of_page_allocation(left) &&
-            is_end_of_page_allocation(right)) {
+        is_start_of_page_allocation(left) &&
+        is_end_of_page_allocation(right)) {
         // The entire page was free and can be returned to the page allocator.
         unlink_free_unknown_bucket(heap, (free_t *)header);
         free_to_page_allocator(heap, left, size + get_size(left) + sizeof(header_t));
