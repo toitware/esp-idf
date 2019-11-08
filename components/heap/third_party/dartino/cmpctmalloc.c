@@ -218,9 +218,9 @@ typedef struct free_struct {
 } free_t;
 
 typedef enum {
-  PAGE_FREE = 0,
-  PAGE_IN_USE = 1,    // Page is first in an allocation.
-  PAGE_CONTINUED = 2  // Page is subsequent in an allocation.
+    PAGE_FREE = 0,
+    PAGE_IN_USE = 1,    // Page is first in an allocation.
+    PAGE_CONTINUED = 2  // Page is subsequent in an allocation.
 } page_use_t;
 
 // For page allocator, not originally part of cmpctmalloc.  These fields are 32 bit
@@ -328,7 +328,7 @@ IRAM_ATTR static int size_to_index_helper(
     // every 32 up to 512 etc.  This can be thought of as rows of 8 buckets.
     // We use the compiler intrinsic count-leading-zeros to find the bucket.
     // Eg. 128-255 has 24 leading zeros and we want row to be 4.
-    unsigned row = sizeof(size_t) * 8 - 4 - __builtin_clzl(size);
+    unsigned row = sizeof(size_t) * (8 - 4) - __builtin_clzl(size);
     // For row 4 we want to shift down 4 bits.
     unsigned column = (size >> row) & 7;
     int row_column = (row << 3) | column;
@@ -827,7 +827,7 @@ IRAM_ATTR void *cmpct_alloc(cmpct_heap_t *heap, size_t size)
     }
 #ifdef CMPCT_DEBUG
     memset(result, ALLOC_FILL, size);
-    memset(((char *)result) + size, PADDING_FILL, rounded_up - size - sizeof(header_t));
+    memset(((char *)result) + size, PADDING_FILL, (rounded_up - size) - sizeof(header_t));
 #endif
     unlock(heap);
     return result;
@@ -1105,7 +1105,7 @@ void cmpct_get_info_impl(cmpct_heap_t *heap, multi_heap_info_t *info)
     info->total_free_bytes = heap->remaining;
     // Subtract the two end sentinels and the free list header that are always
     // the minimum that is taken by the heap.
-    info->total_allocated_bytes = heap->size - heap->remaining - 3 * sizeof(header_t);
+    info->total_allocated_bytes = (heap->size - heap->remaining) - 3 * sizeof(header_t);
     info->largest_free_block = 0;
     // TODO: We don't currently keep track of the all-time low number of free
     // bytes.
@@ -1118,29 +1118,29 @@ void cmpct_get_info_impl(cmpct_heap_t *heap, multi_heap_info_t *info)
     // Include sentinel in iteration.
     for (size_t i = 0; i <= heap->number_of_pages; i++) {
         if (heap->pages[i].status == current_status && i != heap->number_of_pages) {
-          current_page_run += PAGE_SIZE;
+            current_page_run += PAGE_SIZE;
         } else {
-          if (current_status == PAGE_FREE) {
-            info->total_free_bytes += current_page_run;
-            if (current_page_run != 0) {
-              info->free_blocks++;
-              if (current_page_run > info->largest_free_block) {
-                info->largest_free_block = current_page_run;
-              }
+            if (current_status == PAGE_FREE) {
+                info->total_free_bytes += current_page_run;
+                if (current_page_run != 0) {
+                    info->free_blocks++;
+                    if (current_page_run > info->largest_free_block) {
+                        info->largest_free_block = current_page_run;
+                    }
+                }
+            } else {
+                if (current_tag != heap) {  // Pages used for the sub-page allocator are self-tagged.
+                    info->total_allocated_bytes += current_page_run;
+                    if (current_page_run != 0) info->allocated_blocks++;
+                }
             }
-          } else {
-            if (current_tag != heap) {  // Pages used for the sub-page allocator are self-tagged.
-              info->total_allocated_bytes += current_page_run;
-              if (current_page_run != 0) info->allocated_blocks++;
+            if (heap->pages[i].status == PAGE_FREE) {
+                current_status = PAGE_FREE;
+            } else {
+                current_status = PAGE_CONTINUED;
+                current_tag = heap->pages[i].tag;
             }
-          }
-          if (heap->pages[i].status == PAGE_FREE) {
-            current_status = PAGE_FREE;
-          } else {
-            current_status = PAGE_CONTINUED;
-            current_tag = heap->pages[i].tag;
-          }
-          current_page_run = PAGE_SIZE;
+            current_page_run = PAGE_SIZE;
         }
     }
     if (info->largest_free_block == 0) {
@@ -1249,7 +1249,7 @@ void multi_heap_set_lock(cmpct_heap_t *heap, void *lock)
     heap->lock = lock;
 }
 
-void cmpct_set_thread_tag(void* tag)
+void cmpct_set_thread_tag(void *tag)
 {
     first_allocations = false;
     assert(MULTI_HEAP_THREAD_TAG_INDEX < configNUM_THREAD_LOCAL_STORAGE_POINTERS);
