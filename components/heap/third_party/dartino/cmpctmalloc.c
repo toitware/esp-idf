@@ -102,7 +102,8 @@ static int first_allocations = true;
 
 #endif  // TEST_CMPCTMALLOC
 
-#define ROUNDUP(x, alignment) (((x) + (alignment) - 1) & ~((alignment) - 1))
+#define ROUND_UP(x, alignment) (((x) + (alignment) - 1) & ~((alignment) - 1))
+#define ROUND_DOWN(x, alignment) ((x) & ~((alignment) - 1))
 #define IS_ALIGNED(x, alignment) (((x) & ((alignment) - 1)) == 0)
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
@@ -346,7 +347,7 @@ IRAM_ATTR static int size_to_index_helper(
 // Round up size to next bucket when allocating.
 IRAM_ATTR static int size_to_index_allocating(size_t size, size_t *rounded_up_out)
 {
-    size_t rounded = ROUNDUP(size, 8);
+    size_t rounded = ROUND_UP(size, 8);
     return size_to_index_helper(rounded, rounded_up_out, -8, 1);
 }
 
@@ -400,7 +401,7 @@ IRAM_ATTR static int find_nonempty_bucket(cmpct_heap_t *heap, int index)
     mask = mask * 2 + 1;
     mask &= heap->free_list_bits[index >> 5];
     if (mask != 0) return (index & ~0x1f) + __builtin_clz(mask);
-    for (index = ROUNDUP(index + 1, 32); index <= NUMBER_OF_BUCKETS; index += 32) {
+    for (index = ROUND_UP(index + 1, 32); index <= NUMBER_OF_BUCKETS; index += 32) {
         mask = heap->free_list_bits[index >> 5];
         if (mask != 0u) return index + __builtin_clz(mask);
     }
@@ -524,7 +525,7 @@ void cmpct_test_buckets(void)
     for (unsigned i = 1; i <= 128; i++) {
         // Round up when allocating.
         bucket = size_to_index_allocating(i, &rounded);
-        unsigned expected = (ROUNDUP(i, 8) >> 3) - 1;
+        unsigned expected = (ROUND_UP(i, 8) >> 3) - 1;
         USE(expected);
         USE(bucket);
         ASSERT(bucket == expected);
@@ -548,7 +549,7 @@ void cmpct_test_buckets(void)
         for (unsigned i = j * 8; i <= j * 16; i++) {
             // Round up to j multiple in this range when allocating.
             bucket = size_to_index_allocating(i, &rounded);
-            unsigned expected = bucket_base + ROUNDUP(i, j) / j;
+            unsigned expected = bucket_base + ROUND_UP(i, j) / j;
             USE(expected);
             ASSERT(bucket == expected);
             ASSERT(IS_ALIGNED(rounded, j));
@@ -969,24 +970,22 @@ void cmpct_init(cmpct_heap_t *heap)
 // code that detects wholly empty pages and returns them to the page allocator.
 cmpct_heap_t *cmpct_register_impl(void *start, size_t size)
 {
-    ASSERT(size > sizeof(cmpct_heap_t));
+    if (size < sizeof(cmpct_heap_t)) return NULL;  // Area too small.
     // We can't have more pages than the rounded down size.
     intptr_t pages = size >> PAGE_SIZE_SHIFT;
-    ASSERT(pages > 0);
+    ASSERT(pages >= 0);
     ASSERT((sizeof(cmpct_heap_t) + pages * sizeof(Page)) < PAGE_SIZE);
 
     uintptr_t start_int = (uintptr_t)start;
-    intptr_t header_waste = ROUNDUP(start_int, sizeof(header_t)) - start_int;
+    intptr_t header_waste = ROUND_UP(start_int, sizeof(header_t)) - start_int;
     uintptr_t end_int = (uintptr_t)start + size;
     start_int += header_waste;
     uintptr_t end_of_struct = start_int + sizeof(cmpct_heap_t) + pages * sizeof(Page);
-    ASSERT(end_of_struct < end_int);
-    uintptr_t start_of_first_page = ROUNDUP(end_of_struct, PAGE_SIZE);
-    ASSERT(start_of_first_page < end_int);
+    ASSERT(end_of_struct <= end_int);
+    uintptr_t start_of_first_page = ROUND_UP(end_of_struct, PAGE_SIZE);
 
     // May be a little smaller than the old value of pages.
-    ASSERT((end_int - start_of_first_page) >> PAGE_SIZE_SHIFT <= pages);
-    pages = (end_int - start_of_first_page) >> PAGE_SIZE_SHIFT;
+    pages = start_of_first_page > end_int ? 0 : (end_int - start_of_first_page) >> PAGE_SIZE_SHIFT;
 
     cmpct_heap_t *page_heap = (cmpct_heap_t *)start_int;
     page_heap->number_of_pages = pages;
@@ -1003,21 +1002,30 @@ cmpct_heap_t *cmpct_register_impl(void *start, size_t size)
 
     cmpct_init(page_heap);
 
-    uintptr_t rest_of_zeroth_page = ROUNDUP(end_of_struct, sizeof(header_t));
-    // Unaligned memory before the start of the first page is added to the
-    // heap for small allocations.
-    intptr_t rest = start_of_first_page - rest_of_zeroth_page;
-    if (rest > arena_overhead + sizeof(free_t)) {
-        add_to_heap(page_heap, (void *)rest_of_zeroth_page, rest, NULL);
-    }
-    // Unaligned memory after the end of the last page can also be added to
-    // the heap for small allocations.
-    size_t end_of_last_page = start_of_first_page + PAGE_SIZE * pages;
-    rest = end_int - end_of_last_page;
-    if (rest > arena_overhead + sizeof(free_t)) {
-        add_to_heap(page_heap, (void *)end_of_last_page, rest, NULL);
-    }
+    uintptr_t rest_of_zeroth_page = ROUND_UP(end_of_struct, sizeof(header_t));
 
+    // If we were handed a very small amount of memory then we just give the
+    // entire space to the small allocation arena.
+    if (start_of_first_page >= end_int) {
+      intptr_t rest = ROUND_DOWN(end_int, sizeof(header_t)) - rest_of_zeroth_page;
+      if (rest >= (intptr_t)(arena_overhead + sizeof(free_t))) {
+          add_to_heap(page_heap, (void *)rest_of_zeroth_page, rest, NULL);
+      }
+    } else {
+      // Unaligned memory before the start of the first page is added to the
+      // heap for small allocations.
+      intptr_t rest = start_of_first_page - rest_of_zeroth_page;
+      if (rest > (intptr_t)(arena_overhead + sizeof(free_t))) {
+          add_to_heap(page_heap, (void *)rest_of_zeroth_page, rest, NULL);
+      }
+      // Unaligned memory after the end of the last page can also be added to
+      // the heap for small allocations.
+      size_t end_of_last_page = start_of_first_page + PAGE_SIZE * pages;
+      rest = ROUND_DOWN(end_int, sizeof(header_t)) - end_of_last_page;
+      if (rest > (intptr_t)(arena_overhead + sizeof(free_t))) {
+          add_to_heap(page_heap, (void *)end_of_last_page, rest, NULL);
+      }
+    }
     return page_heap;
 }
 
@@ -1251,9 +1259,11 @@ void multi_heap_set_lock(cmpct_heap_t *heap, void *lock)
 
 void cmpct_set_thread_tag(void *tag)
 {
+#ifndef TEST_CMPCTMALLOC
     first_allocations = false;
     assert(MULTI_HEAP_THREAD_TAG_INDEX < configNUM_THREAD_LOCAL_STORAGE_POINTERS);
     vTaskSetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX, tag);
+#endif
 }
 
 void cmpct_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void *tag, tagged_memory_callback_t callback)
@@ -1285,6 +1295,10 @@ void cmpct_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void
 }
 
 #ifdef TEST_CMPCTMALLOC
+/* Run the tests with:
+   gcc -m32 -fsanitize=address -DTEST_CMPCTMALLOC -DDEBUG=1 -g -o test third_party/esp-idf/components/heap/third_party/dartino/cmpctmalloc.c && ./test
+   gcc      -fsanitize=address -DTEST_CMPCTMALLOC -DDEBUG=1 -g -o test third_party/esp-idf/components/heap/third_party/dartino/cmpctmalloc.c && ./test
+ */
 
 int main(int argc, char *argv[]) {
     int TEST_HEAP_SIZE = 900000;
@@ -1294,6 +1308,33 @@ int main(int argc, char *argv[]) {
     cmpct_test_tagged_allocations(heap);
     for (int i = 0; i < 1000; i++) {
         cmpct_test_churn(heap);
+    }
+
+    for (int size = 0; size < 12000; size++) {
+        int first_success = -1;
+        arena = malloc(size);
+        heap = cmpct_register_impl(arena, size);
+        if (heap == NULL) {
+          ASSERT(size < sizeof(cmpct_heap_t));
+          free(arena);
+          continue;
+        }
+        for (int allocation = SMALL_ALLOCATION_LIMIT; allocation >= 1; allocation--) {
+            void *p = cmpct_alloc(heap, allocation);
+            if (p) {
+              if (first_success == -1) {
+                first_success = allocation;
+              }
+              memset(p, 0x77, allocation);
+            } else {
+              if (first_success != -1) {
+                printf("At size %d, allocation failed at size %d\n", size, allocation);
+              }
+            }
+            cmpct_free(heap, p);
+        }
+        ASSERT(size < sizeof(cmpct_heap_t) + arena_overhead + 3 * sizeof(header_t) || first_success != -1);
+        free(arena);
     }
 }
 
