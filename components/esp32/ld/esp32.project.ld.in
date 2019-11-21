@@ -170,11 +170,6 @@ SECTIONS
   .dram0.data :
   {
     _data_start = ABSOLUTE(.);
-    /* For some reason the ESP tools want to write the SHA256 at offset 0xb0
-     * and it has 32 bytes of data, so we reserve space for that. */
-    _checksum_buffer = ABSOLUTE(.);
-    . += 208;
-    _checksum_buffer_end = ABSOLUTE(.);
     _bt_data_start = ABSOLUTE(.);
     *libbt.a:(.data .data.*)
     . = ALIGN (4);
@@ -257,7 +252,7 @@ SECTIONS
   ASSERT(((_bss_end - ORIGIN(dram0_0_seg)) <= LENGTH(dram0_0_seg)),
           "DRAM segment data does not fit.")
 
-  .flash.rodata :
+  .flash.rodata :  /* esptool.py looks for this name to find the app version info */
   {
     _rodata_start = ABSOLUTE(.);
 
