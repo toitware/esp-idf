@@ -5,7 +5,7 @@
 
 [submodule "components/esptool_py/esptool"]
 	path = components/esptool_py/esptool
-	url = ../../espressif/esptool.git
+	url = https://github.com/toitware/esptool.git
 
 [submodule "components/bt/controller/lib"]
 	path = components/bt/controller/lib
