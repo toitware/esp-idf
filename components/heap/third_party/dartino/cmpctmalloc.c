@@ -1375,10 +1375,12 @@ static cmpct_heap_t *initial_heap()
 {
     uintptr_t size = 1 << 30;  // 1 Gigabyte.
     void* pages = NULL;
-    while (pages == NULL) {
+    while (true) {
         pages = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, 0, 0);
         if (pages == NULL) {
             size >>= 1;
+        } else {
+            break;
         }
     }
     cmpct_heap_t *heap = cmpct_register_impl(pages, size);
@@ -1402,6 +1404,8 @@ static int clzs(size_t size)
         return __builtin_clzl(size);
     } else if (sizeof(size_t) == sizeof(long long)) {
         return __builtin_clzll(size);
+    } else {
+      FATAL("Strange C compiler");
     }
 }
 
@@ -1412,13 +1416,12 @@ void *calloc(size_t nelem, size_t elsize)
         // Check for multiplication overflow after fast case check failed.
         const int word_bits = sizeof(size_t) * CHAR_BIT;
         int bits = word_bits - clzs(nelem);
-        bits +=  word_bits - clzs(elsize);
+        bits += word_bits - clzs(elsize);
         if (bits > word_bits) return NULL;  // Multiplication ran out of bits.
     }
     size_t size = nelem * elsize;
     void *ptr = malloc(size);
-    if (ptr == NULL) return ptr;
-    memset(ptr, 0, size);
+    if (ptr != NULL) memset(ptr, 0, size);
     return ptr;
 }
 
