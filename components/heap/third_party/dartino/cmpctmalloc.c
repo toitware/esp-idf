@@ -777,7 +777,9 @@ static void cmpct_test_churn(cmpct_heap_t *heap)
 
 IRAM_ATTR void *cmpct_alloc(cmpct_heap_t *heap, size_t size)
 {
-    if (size == 0u) return NULL;
+    // In C++ we are not allowed to return null for zero length allocations, so
+    // bump the size and return a small allocation instead.
+    if (size == 0u) size = 1;
 
     ASSERT(size <= SMALL_ALLOCATION_LIMIT);
 
