@@ -15,7 +15,11 @@
 #include <string.h>
 #include <unistd.h>
 
-#ifdef TEST_CMPCTMALLOC
+#if defined(TEST_CMPCTMALLOC) || defined (CMPCTMALLOC_ON_LINUX)
+
+#include <limits.h>
+#include <stdlib.h>
+#include <sys/mman.h>
 
 #define LTRACEF(...)
 #define LTRACE_ENTRY
@@ -515,6 +519,18 @@ IRAM_ATTR static void *create_allocation_header(
     return header + 1;
 }
 
+#if defined(TEST_CMPCTMALLOC) || defined(CMPCTMALLOC_ON_LINUX)
+
+static void *current_test_tag = NULL;
+
+// For testing - doesn't use thread local storage.
+static void cmpct_test_set_thread_tag(void *tag)
+{
+    current_test_tag = tag;
+}
+
+#endif
+
 #ifdef TEST_CMPCTMALLOC
 
 void cmpct_test_buckets(void)
@@ -658,14 +674,6 @@ static bool cmpct_test_visitor_free(void *r, void *tag, void *address, size_t si
     record->address = address;
     record->size = size;
     return true;  // Free the allocation.
-}
-
-static void *current_test_tag = NULL;
-
-// For testing - doesn't use thread local storage.
-static void cmpct_test_set_thread_tag(void *tag)
-{
-    current_test_tag = tag;
 }
 
 static void cmpct_test_tagged_allocations(cmpct_heap_t *heap)
@@ -976,7 +984,6 @@ cmpct_heap_t *cmpct_register_impl(void *start, size_t size)
     // We can't have more pages than the rounded down size.
     intptr_t pages = size >> PAGE_SIZE_SHIFT;
     ASSERT(pages >= 0);
-    ASSERT((sizeof(cmpct_heap_t) + pages * sizeof(Page)) < PAGE_SIZE);
 
     uintptr_t start_int = (uintptr_t)start;
     intptr_t header_waste = ROUND_UP(start_int, sizeof(header_t)) - start_int;
@@ -1261,7 +1268,7 @@ void multi_heap_set_lock(cmpct_heap_t *heap, void *lock)
 
 void cmpct_set_thread_tag(void *tag)
 {
-#ifndef TEST_CMPCTMALLOC
+#if !defined(TEST_CMPCTMALLOC) && !defined(CMPCTMALLOC_ON_LINUX)
     first_allocations = false;
     assert(MULTI_HEAP_THREAD_TAG_INDEX < configNUM_THREAD_LOCAL_STORAGE_POINTERS);
     vTaskSetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX, tag);
@@ -1338,6 +1345,96 @@ int main(int argc, char *argv[]) {
         ASSERT(size < sizeof(cmpct_heap_t) + arena_overhead + 3 * sizeof(header_t) || first_success != -1);
         free(arena);
     }
+}
+
+#endif  // TEST_CMPCTMALLOC
+
+#ifdef CMPCTMALLOC_ON_LINUX
+/*
+# Create dynamic malloc library with:
+FLAGS="-DCMPCTMALLOC_ON_LINUX -fPIC -shared"
+CFILE=third_party/esp-idf/components/heap/third_party/dartino/cmpctmalloc.c
+gcc -m32 $FLAGS -g -o build/debug/bin/cmpctmalloc_32.so $CFILE
+gcc      $FLAGS -g -o build/debug64/bin/cmpctmalloc_64.so $CFILE
+gcc -m32 $FLAGS -O3 -o build/release/bin/cmpctmalloc_32.so $CFILE
+gcc      $FLAGS -O3 -o build/release64/bin/cmpctmalloc_64.so $CFILE
+# Then use it with:
+LD_PRELOAD=`pwd`/build/debug64/bin/cmpctmalloc_64.so ./build/debug64/bin/toitc hw.toit
+# or:
+CMPCTMALLOC_DUMP_ON_EXIT=1 LD_PRELOAD=`pwd`/build/debug64/bin/cmpctmalloc_64.so ./build/debug64/bin/toitc hw.toit
+ */
+
+static cmpct_heap_t *heap = NULL;
+
+void dump_on_exit()
+{
+    if (heap != NULL) cmpct_dump(heap);
+}
+
+static cmpct_heap_t *initial_heap()
+{
+    uintptr_t size = 1 << 30;  // 1 Gigabyte.
+    void* pages = NULL;
+    while (true) {
+        pages = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, 0, 0);
+        if (pages == NULL) {
+            size >>= 1;
+        } else {
+            break;
+        }
+    }
+    cmpct_heap_t *heap = cmpct_register_impl(pages, size);
+    if (getenv("CMPCTMALLOC_DUMP_ON_EXIT") != NULL) atexit(dump_on_exit);
+    return heap;
+}
+
+void *malloc(size_t size)
+{
+    if (heap == NULL) heap = initial_heap();
+    return cmpct_malloc_impl(heap, size);
+}
+
+// Count leading zeros.
+static int clzs(size_t size)
+{
+    ASSERT(size != 0);  // __builtin_clz is undefined for zero input.
+    if (sizeof(size_t) == sizeof(int)) {
+        return __builtin_clz(size);
+    } else if (sizeof(size_t) == sizeof(long)) {
+        return __builtin_clzl(size);
+    } else if (sizeof(size_t) == sizeof(long long)) {
+        return __builtin_clzll(size);
+    } else {
+      FATAL("Strange C compiler");
+    }
+}
+
+void *calloc(size_t nelem, size_t elsize)
+{
+    if (heap == NULL) heap = initial_heap();
+    if (elsize >= 0x40 && nelem > 0x400) {
+        // Check for multiplication overflow after fast case check failed.
+        const int word_bits = sizeof(size_t) * CHAR_BIT;
+        int bits = word_bits - clzs(nelem);
+        bits += word_bits - clzs(elsize);
+        if (bits > word_bits) return NULL;  // Multiplication ran out of bits.
+    }
+    size_t size = nelem * elsize;
+    void *ptr = malloc(size);
+    if (ptr != NULL) memset(ptr, 0, size);
+    return ptr;
+}
+
+void free(void *ptr)
+{
+    ASSERT(heap != NULL);
+    return cmpct_free_impl(heap, ptr);
+}
+
+void *realloc(void* old, size_t size)
+{
+    if (heap == NULL) heap = initial_heap();
+    return cmpct_realloc_impl(heap, old, size);
 }
 
 #endif
