@@ -1236,8 +1236,8 @@ IRAM_ATTR static void page_iterate(cmpct_heap_t *heap, void *user_data, void *ta
                             // Callback indicates we should free the memory.
                             page_free(heap, allocation, j);
                             i += j - 1;
-                            break;
                         }
+                        break;
                     }
                 }
             }
@@ -1286,7 +1286,7 @@ void cmpct_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void
              !is_end_of_page_allocation(header);
              header = right_header(header)) {
             if (!is_tagged_as_free(header) && (tag == NULL || header->tag == tag)) {
-                if (callback(user_data, header->tag, header + 1, get_size(header))) {
+                if (callback(user_data, header->tag, header + 1, get_size(header) - sizeof(header_t))) {
                     // Callback returned true, so the allocation should be freed.
                     // We free with a delay so that it does not disturb the iteration.
                     if (to_free) {
@@ -1435,6 +1435,11 @@ void *realloc(void* old, size_t size)
 {
     if (heap == NULL) heap = initial_heap();
     return cmpct_realloc_impl(heap, old, size);
+}
+
+typedef bool heap_caps_iterate_callback(void*, void*, void*, size_t);
+void heap_caps_iterate_tagged_memory_areas(void* user_data, void* tag, heap_caps_iterate_callback callback) {
+  cmpct_iterate_tagged_memory_areas(heap, user_data, tag, callback);
 }
 
 #endif
