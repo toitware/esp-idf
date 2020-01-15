@@ -679,8 +679,8 @@ static bool cmpct_test_visitor_free(void *r, void *tag, void *address, size_t si
 static void cmpct_test_tagged_allocations(cmpct_heap_t *heap)
 {
     cmpct_test_set_thread_tag(NULL);  // From here, allocations are not tagged.
-    void *alloc_1 = cmpct_alloc(heap, 123);
-    void *alloc_2 = cmpct_alloc(heap, 123);
+    void *alloc_1 = cmpct_alloc(heap, 113);
+    void *alloc_2 = cmpct_alloc(heap, 113);
     cmpct_test_visit_record record;
     record.visited = false;
 
@@ -692,11 +692,11 @@ static void cmpct_test_tagged_allocations(cmpct_heap_t *heap)
     cmpct_iterate_tagged_memory_areas(heap, &record, &record, cmpct_test_visitor_keep);
     ASSERT(!record.visited);  // Still no tagged allocations.
 
-    void *alloc_3 = cmpct_alloc(heap, 123);  // This allocation will be tagged.
+    void *alloc_3 = cmpct_alloc(heap, 113);  // This allocation will be tagged.
     cmpct_iterate_tagged_memory_areas(heap, &record, &record, cmpct_test_visitor_keep);
     ASSERT(record.visited);  // We found the tagged allocation.
     ASSERT(record.address == alloc_3);
-    ASSERT(record.size >= 123);
+    ASSERT(record.size == 120);  // 113 rounded up.
 
     record.visited = false;
     record.address = NULL;
@@ -707,7 +707,7 @@ static void cmpct_test_tagged_allocations(cmpct_heap_t *heap)
     cmpct_iterate_tagged_memory_areas(heap, &record, NULL, cmpct_test_visitor_keep);
     ASSERT(record.visited);  // We found the tagged allocation.
     ASSERT(record.address == alloc_3);
-    ASSERT(record.size >= 123);
+    ASSERT(record.size >= 113);
 
     record.visited = false;
     record.address = NULL;
@@ -720,7 +720,19 @@ static void cmpct_test_tagged_allocations(cmpct_heap_t *heap)
     cmpct_free(heap, alloc_1);
     cmpct_free(heap, alloc_2);
 
-    alloc_1 = cmpct_alloc(heap, 123);  // Create new tagged allocation.
+    alloc_1 = cmpct_malloc_impl(heap, PAGE_SIZE * 2);  // New allocation more than one page
+    record.visited = false;
+    cmpct_iterate_tagged_memory_areas(heap, &record, &record, cmpct_test_visitor_keep);
+    ASSERT(record.visited);  // It was found.
+    ASSERT(record.size == PAGE_SIZE * 2);
+
+    record.visited = false;
+    cmpct_iterate_tagged_memory_areas(heap, &record, &record, cmpct_test_visitor_keep);
+    ASSERT(record.visited);  // Still found (not freed by the keep callback).
+
+    cmpct_free_impl(heap, alloc_1);
+
+    alloc_1 = cmpct_alloc(heap, 113);  // Create new tagged allocation.
 
     record.visited = false;
     record.address = NULL;
@@ -728,7 +740,7 @@ static void cmpct_test_tagged_allocations(cmpct_heap_t *heap)
     cmpct_iterate_tagged_memory_areas(heap, &record, &record, cmpct_test_visitor_free);  // Use freeing callback.
     ASSERT(record.visited);  // It was found.
     ASSERT(record.address == alloc_1);
-    ASSERT(record.size >= 123);
+    ASSERT(record.size >= 113);
 
     record.visited = false;
     record.address = NULL;
@@ -1236,8 +1248,8 @@ IRAM_ATTR static void page_iterate(cmpct_heap_t *heap, void *user_data, void *ta
                             // Callback indicates we should free the memory.
                             page_free(heap, allocation, j);
                             i += j - 1;
-                            break;
                         }
+                        break;
                     }
                 }
             }
@@ -1286,7 +1298,7 @@ void cmpct_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void
              !is_end_of_page_allocation(header);
              header = right_header(header)) {
             if (!is_tagged_as_free(header) && (tag == NULL || header->tag == tag)) {
-                if (callback(user_data, header->tag, header + 1, get_size(header))) {
+                if (callback(user_data, header->tag, header + 1, get_size(header) - sizeof(header_t))) {
                     // Callback returned true, so the allocation should be freed.
                     // We free with a delay so that it does not disturb the iteration.
                     if (to_free) {
@@ -1435,6 +1447,11 @@ void *realloc(void* old, size_t size)
 {
     if (heap == NULL) heap = initial_heap();
     return cmpct_realloc_impl(heap, old, size);
+}
+
+typedef bool heap_caps_iterate_callback(void*, void*, void*, size_t);
+void heap_caps_iterate_tagged_memory_areas(void* user_data, void* tag, heap_caps_iterate_callback callback) {
+  cmpct_iterate_tagged_memory_areas(heap, user_data, tag, callback);
 }
 
 #endif
