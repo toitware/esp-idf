@@ -196,7 +196,7 @@ typedef bool tagged_memory_callback_t(void *user_data, void *tag, void *allocati
 #define MULTI_HEAP_THREAD_TAG_INDEX 1
 
 void multi_heap_set_thread_tag(void *user_data);
-void multi_heap_iterate_tagged_memory_areas(multi_heap_handle_t heap, void *user_data, void *tag, tagged_memory_callback_t callback);
+void multi_heap_iterate_tagged_memory_areas(multi_heap_handle_t heap, void *user_data, void *tag, tagged_memory_callback_t callback, int flags);
 
 #ifdef __cplusplus
 }
