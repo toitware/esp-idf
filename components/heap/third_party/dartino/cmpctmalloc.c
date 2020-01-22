@@ -32,8 +32,8 @@
 #define IRAM_ATTR
 
 #ifdef CMPCTMALLOC_ON_LINUX
-#define MULTI_HEAP_LOCK(x) while(!__sync_bool_compare_and_swap(&(x), NULL, (void*)(&(x))))
-#define MULTI_HEAP_UNLOCK(x) __sync_bool_compare_and_swap(&(x), (void*)(&(x)), NULL)
+#define MULTI_HEAP_LOCK(x) while(!__sync_bool_compare_and_swap(&(x), NULL, (void *)(&(x))))
+#define MULTI_HEAP_UNLOCK(x) __sync_bool_compare_and_swap(&(x), (void *)(&(x)), NULL)
 #else
 #define MULTI_HEAP_LOCK(x)
 #define MULTI_HEAP_UNLOCK(x)
@@ -97,7 +97,8 @@ typedef uintptr_t vaddr_t;
 #define INFO stdout
 
 #ifdef __XTENSA__
-IRAM_ATTR inline static bool in_interrupt_service_routine() {
+IRAM_ATTR inline static bool in_interrupt_service_routine()
+{
     int ps_register;
     __asm__ __volatile__("rsr.ps %0" : "=a"(ps_register));
     return (ps_register & 0xf) != 0;
@@ -194,19 +195,22 @@ typedef struct header_struct {
     void *tag;  // Used for the pointer set by the user with heap_caps_set_thread_tag.
 } header_t;
 
-static INLINE size_t get_left_size(header_t *header) {
+static INLINE size_t get_left_size(header_t *header)
+{
     // The mask here should be 0xffff, but that would cause gcc to emit a 16 bit
     // load. We know the lowest bit of the size (top 16 bits) is always 0 so we
     // just include it here.
     return header->size_ & 0x1ffff;
 }
 
-static INLINE void set_left_size(header_t *header, size_t size) {
+static INLINE void set_left_size(header_t *header, size_t size)
+{
     ASSERT(size <= 0xffff);
     header->size_ = (header->size_ & ~0xffff) | size;
 }
 
-static INLINE size_t get_size(header_t *header) {
+static INLINE size_t get_size(header_t *header)
+{
     size_t field = header->size_;
     // We should just shift down by 16, but that would cause gcc to emit a 16 bit
     // load. We know the highest bit of the left_size (bottom 16 bits) is always 0
@@ -217,7 +221,8 @@ static INLINE size_t get_size(header_t *header) {
     return (field >> 16) + ((field >> 15) & 1);
 }
 
-static INLINE void set_size(header_t *header, size_t size) {
+static INLINE void set_size(header_t *header, size_t size)
+{
     ASSERT(size <= 0xffff);
     ASSERT((size & 1) == 0);
     header->size_ = (header->size_ & 0xffff) | (size << 16);
@@ -669,10 +674,10 @@ typedef struct cmpct_test_visit_record_struct {
 static bool cmpct_test_visitor_keep(void *r, void *tag, void *address, size_t size)
 {
     cmpct_test_visit_record *record = (cmpct_test_visit_record *)r;
-    if (tag == (void*)CMPCTMALLOC_ITERATE_TAG_FREE) {
-    if (size > record->largest_free_area_visited) record->largest_free_area_visited = size;
-    } else if (tag == (void*)CMPCTMALLOC_ITERATE_TAG_HEAP_OVERHEAD) {
-      if (size > record->largest_overhead_area_visited) record->largest_overhead_area_visited = size;
+    if (tag == (void *)CMPCTMALLOC_ITERATE_TAG_FREE) {
+        if (size > record->largest_free_area_visited) record->largest_free_area_visited = size;
+    } else if (tag == (void *)CMPCTMALLOC_ITERATE_TAG_HEAP_OVERHEAD) {
+        if (size > record->largest_overhead_area_visited) record->largest_overhead_area_visited = size;
     } else if (tag != NULL) {
         record->visited = true;
         record->address = address;
@@ -1053,25 +1058,25 @@ cmpct_heap_t *cmpct_register_impl(void *start, size_t size)
     // If we were handed a very small amount of memory then we just give the
     // entire space to the small allocation arena.
     if (start_of_first_page >= end_int) {
-      intptr_t rest = ROUND_DOWN(end_int, sizeof(header_t)) - rest_of_zeroth_page;
-      if (rest >= (intptr_t)(arena_overhead + sizeof(free_t))) {
-          add_to_heap(page_heap, (void *)rest_of_zeroth_page, rest, NULL);
-      }
+        intptr_t rest = ROUND_DOWN(end_int, sizeof(header_t)) - rest_of_zeroth_page;
+        if (rest >= (intptr_t)(arena_overhead + sizeof(free_t))) {
+            add_to_heap(page_heap, (void *)rest_of_zeroth_page, rest, NULL);
+        }
     } else {
-      // Unaligned memory before the start of the first page is added to the
-      // heap for small allocations.
-      intptr_t rest = start_of_first_page - rest_of_zeroth_page;
-      if (rest > (intptr_t)(arena_overhead + sizeof(free_t))) {
-          add_to_heap(page_heap, (void *)rest_of_zeroth_page, rest, NULL);
-          page_heap->end_of_heap_structure = (void*)rest_of_zeroth_page;
-      }
-      // Unaligned memory after the end of the last page can also be added to
-      // the heap for small allocations.
-      size_t end_of_last_page = start_of_first_page + PAGE_SIZE * pages;
-      rest = ROUND_DOWN(end_int, sizeof(header_t)) - end_of_last_page;
-      if (rest > (intptr_t)(arena_overhead + sizeof(free_t))) {
-          add_to_heap(page_heap, (void *)end_of_last_page, rest, NULL);
-      }
+        // Unaligned memory before the start of the first page is added to the
+        // heap for small allocations.
+        intptr_t rest = start_of_first_page - rest_of_zeroth_page;
+        if (rest > (intptr_t)(arena_overhead + sizeof(free_t))) {
+            add_to_heap(page_heap, (void *)rest_of_zeroth_page, rest, NULL);
+            page_heap->end_of_heap_structure = (void *)rest_of_zeroth_page;
+        }
+        // Unaligned memory after the end of the last page can also be added to
+        // the heap for small allocations.
+        size_t end_of_last_page = start_of_first_page + PAGE_SIZE * pages;
+        rest = ROUND_DOWN(end_int, sizeof(header_t)) - end_of_last_page;
+        if (rest > (intptr_t)(arena_overhead + sizeof(free_t))) {
+            add_to_heap(page_heap, (void *)end_of_last_page, rest, NULL);
+        }
     }
     return page_heap;
 }
@@ -1266,18 +1271,28 @@ IRAM_ATTR static void page_iterate(cmpct_heap_t *heap, void *user_data, void *ta
         if (status == PAGE_IN_USE || status == PAGE_FREE) {
             // A flag can indicate that we should iterate over all allocations, but we still
             // don't iterate over the page allocations that the sub-page allocator made.
-            bool iterate_free = (status == PAGE_FREE && (flags & CMPCTMALLOC_ITERATE_UNUSED) != 0);
-            bool iterate_allocated = (
-                status == PAGE_IN_USE &&
+            bool iterate_free = false;
+            bool iterate_allocated = false;
+            int continuation_status = 0;
+            void *found_tag = NULL;
+            if (status == PAGE_FREE && (flags & CMPCTMALLOC_ITERATE_UNUSED) != 0) {
+                iterate_free = true;
+                continuation_status = PAGE_FREE;  // It's all one area as long as we see free pages.
+                found_tag = (void *)CMPCTMALLOC_ITERATE_TAG_FREE;
+            }
+            if (status == PAGE_IN_USE &&
                 (heap->pages[i].tag == tag ||
-                 ((flags & CMPCTMALLOC_ITERATE_ALL_ALLOCATIONS) != 0 && heap->pages[i].tag != heap)));
+                 ((flags & CMPCTMALLOC_ITERATE_ALL_ALLOCATIONS) != 0 && heap->pages[i].tag != heap))) {
+                iterate_allocated = true;
+                continuation_status = PAGE_CONTINUED;  // It's all one area as long as we see continued pages.
+                found_tag = heap->pages[i].tag;
+            }
             if (iterate_free || iterate_allocated) {
-                void *tag = iterate_allocated ? heap->pages[i].tag : (void*)CMPCTMALLOC_ITERATE_TAG_FREE;
                 for (int j = 1; true; j++) {
                     ASSERT(i + j <= heap->number_of_pages);
-                    if (heap->pages[i + j].status != PAGE_CONTINUED) {
+                    if (heap->pages[i + j].status != continuation_status) {
                         void *allocation = heap->page_base + i * PAGE_SIZE;
-                        if (callback(user_data, tag, allocation, j * PAGE_SIZE) && iterate_allocated) {
+                        if (callback(user_data, found_tag, allocation, j * PAGE_SIZE) && iterate_allocated) {
                             // Callback indicates we should free the memory.
                             page_free(heap, allocation, j);
                         }
@@ -1322,8 +1337,8 @@ void cmpct_set_thread_tag(void *tag)
 
 void cmpct_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void *tag, tagged_memory_callback_t callback, int flags)
 {
-    if ((flags & CMPCTMALLOC_ITERATE_UNLOCKED) != 0) {
-      lock(heap);
+    if ((flags & CMPCTMALLOC_ITERATE_UNLOCKED) == 0) {
+        lock(heap);
     }
     bool iterate_heap_structure = (flags & CMPCTMALLOC_ITERATE_UNUSED) != 0;
     page_iterate(heap, user_data, tag, callback, flags);
@@ -1344,17 +1359,16 @@ void cmpct_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void
             } else {
                 start_of_overhead = arena;
             }
-            callback(user_data, (void*)CMPCTMALLOC_ITERATE_TAG_HEAP_OVERHEAD, start_of_overhead, first_possible_allocation - (uintptr_t)start_of_overhead);
+            callback(user_data, (void *)CMPCTMALLOC_ITERATE_TAG_HEAP_OVERHEAD, start_of_overhead, first_possible_allocation - (uintptr_t)start_of_overhead);
         }
-        for (header_t *header = (header_t *)(arena + 1) + 1;
-             !is_end_of_page_allocation(header);
-             header = right_header(header)) {
+        for (header_t *header = (header_t *)(arena + 1) + 1; true; header = right_header(header)) {
             if ((flags & CMPCTMALLOC_ITERATE_UNUSED) != 0) {
-                callback(user_data, (void*)CMPCTMALLOC_ITERATE_TAG_HEAP_OVERHEAD, header, sizeof(header_t));
+                callback(user_data, (void *)CMPCTMALLOC_ITERATE_TAG_HEAP_OVERHEAD, header, sizeof(header_t));
             }
+            if (is_end_of_page_allocation(header)) break;
             if (is_tagged_as_free(header)) {
                 if ((flags & CMPCTMALLOC_ITERATE_UNUSED) != 0) {
-                    callback(user_data, (void*)CMPCTMALLOC_ITERATE_TAG_FREE, header + 1, get_size(header) - sizeof(header_t));
+                    callback(user_data, (void *)CMPCTMALLOC_ITERATE_TAG_FREE, header + 1, get_size(header) - sizeof(header_t));
                 }
             } else {
                 if ((flags & CMPCTMALLOC_ITERATE_ALL_ALLOCATIONS) != 0 || header->tag == tag) {
@@ -1371,13 +1385,13 @@ void cmpct_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void
         }
     }
     if (iterate_heap_structure) {
-        callback(user_data, (void*)CMPCTMALLOC_ITERATE_TAG_HEAP_OVERHEAD, heap, (uintptr_t)heap->end_of_heap_structure - (uintptr_t)heap);
+        callback(user_data, (void *)CMPCTMALLOC_ITERATE_TAG_HEAP_OVERHEAD, heap, (uintptr_t)heap->end_of_heap_structure - (uintptr_t)heap);
     }
     if (to_free) {
         cmpct_free_already_locked(heap, to_free + 1);
     }
-    if ((flags & CMPCTMALLOC_ITERATE_UNLOCKED) != 0) {
-      unlock(heap);
+    if ((flags & CMPCTMALLOC_ITERATE_UNLOCKED) == 0) {
+        unlock(heap);
     }
 }
 
@@ -1387,7 +1401,8 @@ void cmpct_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void
    gcc      -fsanitize=address -DTEST_CMPCTMALLOC -DDEBUG=1 -g -o test third_party/esp-idf/components/heap/third_party/dartino/cmpctmalloc.c && ./test
  */
 
-int main(int argc, char *argv[]) {
+int main(int argc, char *argv[])
+{
     int TEST_HEAP_SIZE = 900000;
     void *arena = malloc(TEST_HEAP_SIZE);
     cmpct_heap_t *heap = cmpct_register_impl(arena, TEST_HEAP_SIZE);
@@ -1402,21 +1417,21 @@ int main(int argc, char *argv[]) {
         arena = malloc(size);
         heap = cmpct_register_impl(arena, size);
         if (heap == NULL) {
-          ASSERT(size < sizeof(cmpct_heap_t));
-          free(arena);
-          continue;
+            ASSERT(size < sizeof(cmpct_heap_t));
+            free(arena);
+            continue;
         }
         for (int allocation = SMALL_ALLOCATION_LIMIT; allocation >= 1; allocation--) {
             void *p = cmpct_alloc(heap, allocation);
             if (p) {
-              if (first_success == -1) {
-                first_success = allocation;
-              }
-              memset(p, 0x77, allocation);
+                if (first_success == -1) {
+                    first_success = allocation;
+                }
+                memset(p, 0x77, allocation);
             } else {
-              if (first_success != -1) {
-                printf("At size %d, allocation failed at size %d\n", size, allocation);
-              }
+                if (first_success != -1) {
+                    printf("At size %d, allocation failed at size %d\n", size, allocation);
+                }
             }
             cmpct_free(heap, p);
         }
@@ -1424,8 +1439,8 @@ int main(int argc, char *argv[]) {
         // expect an allocation to succeed, but the memory area can be split
         // over two pages, and so we need twice the minimum before we can be
         // sure of any allocations.
-        uintptr_t MINIMUM_ARENA = arena_overhead + 4 * sizeof(header_t);
-        ASSERT(ROUND_DOWN(size, (int)sizeof(header_t)) <= sizeof(cmpct_heap_t) + MINIMUM_ARENA * 2 || first_success != -1);
+        uintptr_t minimum_arena = arena_overhead + 4 * sizeof(header_t);
+        ASSERT(ROUND_DOWN(size, (int)sizeof(header_t)) <= sizeof(cmpct_heap_t) + minimum_arena * 2 || first_success != -1);
         free(arena);
     }
 }
@@ -1488,7 +1503,7 @@ static int clzs(size_t size)
     } else if (sizeof(size_t) == sizeof(long long)) {
         return __builtin_clzll(size);
     } else {
-      FATAL("Strange C compiler");
+        FATAL("Strange C compiler");
     }
 }
 
@@ -1520,9 +1535,10 @@ void *realloc(void *old, size_t size)
     return cmpct_realloc_impl(heap, old, size);
 }
 
-typedef bool heap_caps_iterate_callback(void*, void*, void*, size_t);
-void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, heap_caps_iterate_callback callback, int flags) {
-  cmpct_iterate_tagged_memory_areas(heap, user_data, tag, callback, flags);
+typedef bool heap_caps_iterate_callback(void *, void *, void *, size_t);
+void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, heap_caps_iterate_callback callback, int flags)
+{
+    cmpct_iterate_tagged_memory_areas(heap, user_data, tag, callback, flags);
 }
 
 #endif
