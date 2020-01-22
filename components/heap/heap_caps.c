@@ -362,11 +362,11 @@ void heap_caps_set_thread_tag(void* tag)
     multi_heap_set_thread_tag(tag);
 }
 
-void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, tagged_memory_callback_t callback)
+void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, tagged_memory_callback_t callback, int flags)
 {
     heap_t *heap;
     SLIST_FOREACH(heap, &registered_heaps, next) {
-        multi_heap_iterate_tagged_memory_areas(heap->heap, user_data, tag, callback);
+        multi_heap_iterate_tagged_memory_areas(heap->heap, user_data, tag, callback, flags);
     }
 }
 

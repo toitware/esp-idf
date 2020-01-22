@@ -40,6 +40,16 @@ extern "C" {
 #define MALLOC_CAP_INVALID          (1<<31) ///< Memory can't be used / list end marker
 
 /**
+ * Flags for heap_caps_iterate_tagged_memory_areas.
+ */
+#define MALLOC_ITERATE_UNLOCKED        (1<<0) /// Dangerous options for use in a crash handler only - avoid deadlocks by not using locking.
+#define MALLOC_ITERATE_ALL_ALLOCATIONS (1<<1) /// Iterate all allocations, not just the ones where the tag matches.
+#define MALLOC_ITERATE_UNALLOCATED     (1<<2) /// Call back for free areas.  Tags are as follows for this:
+
+#define MALLOC_ITERATE_TAG_FREE          (-1)  /// Memory is free and could be allocated.
+#define MALLOC_ITERATE_TAG_HEAP_OVERHEAD (-2)  /// Memory is used by malloc for internal accounting etc.
+
+/**
  * @brief Allocate a chunk of memory which has the given capabilities
  *
  * Equivalent semantics to libc malloc(), for capability-aware memory.
@@ -333,8 +343,9 @@ void heap_caps_set_thread_tag(void *tag);
  * @param user_data   A value that will be passed to each invocation of the callback.
  * @param tag         An opaque piece of data that was passed to heap_caps_set_thread_tag.
  * @param callback    A function to be called for each not-yet-freed memory area with the given tag.
+ * @param flags       Zero or a set of flags, 'or'ed together from MALLOC_ITERATE_UNLOCKED, MALLOC_ITERATE_ALL_ALLOCATIONS and MALLOC_ITERATE_UNALLOCATED.
  */
-void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, tagged_memory_callback_t callback);
+void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, tagged_memory_callback_t callback, int flags);
 
 #ifdef __cplusplus
 }
