@@ -20,6 +20,7 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <pthread.h>
 
 #define LTRACEF(...)
 #define LTRACE_ENTRY
@@ -40,7 +41,8 @@
 #endif
 
 // For testing we just use a static variable for the current tag.
-#define GET_THREAD_LOCAL_TAG current_test_tag
+#define GET_THREAD_LOCAL_TAG pthread_getspecific(tls_key)
+static pthread_key_t tls_key;
 
 typedef struct multi_heap_info cmpct_heap_t;
 
@@ -100,7 +102,9 @@ typedef uintptr_t vaddr_t;
 IRAM_ATTR inline static bool in_interrupt_service_routine() {
     int ps_register;
     __asm__ __volatile__("rsr.ps %0" : "=a"(ps_register));
-    return (ps_register & 0xf) != 0;
+    bool result = (ps_register & 0xf) > 3;
+    if (result) *(char*)ps_register = 0;
+    return result;
 }
 
 static int first_allocations = true;
@@ -139,6 +143,7 @@ void *cmpct_alloc(cmpct_heap_t *heap, size_t size);
 void cmpct_free(cmpct_heap_t *heap, void *payload);
 size_t cmpct_free_size_impl(cmpct_heap_t *heap);
 size_t cmpct_get_allocated_size_impl(cmpct_heap_t *heap, void *p);
+void cmpct_set_thread_tag(void *tag);
 static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, void *tag);
 static void page_free(cmpct_heap_t *heap, void *address, int pages_dummy);
 struct header_struct;
@@ -527,18 +532,6 @@ IRAM_ATTR static void *create_allocation_header(
     return header + 1;
 }
 
-#if defined(TEST_CMPCTMALLOC) || defined(CMPCTMALLOC_ON_LINUX)
-
-static void *current_test_tag = NULL;
-
-// For testing - doesn't use thread local storage.
-static void cmpct_test_set_thread_tag(void *tag)
-{
-    current_test_tag = tag;
-}
-
-#endif
-
 #ifdef TEST_CMPCTMALLOC
 
 void cmpct_test_buckets(void)
@@ -692,7 +685,7 @@ static bool cmpct_test_visitor_free(void *r, void *tag, void *address, size_t si
 
 static void cmpct_test_tagged_allocations(cmpct_heap_t *heap)
 {
-    cmpct_test_set_thread_tag(NULL);  // From here, allocations are not tagged.
+    cmpct_set_thread_tag(NULL);  // From here, allocations are not tagged.
     void *alloc_1 = cmpct_alloc(heap, 113);
     void *alloc_2 = cmpct_alloc(heap, 113);
     cmpct_test_visit_record record;
@@ -701,7 +694,7 @@ static void cmpct_test_tagged_allocations(cmpct_heap_t *heap)
     cmpct_iterate_tagged_memory_areas(heap, &record, &record, cmpct_test_visitor_keep, 0);
     ASSERT(!record.visited);  // No allocations were tagged.
 
-    cmpct_test_set_thread_tag(&record);  // From here, allocations are tagged.
+    cmpct_set_thread_tag(&record);  // From here, allocations are tagged.
 
     record.largest_free_area_visited = 0;
     record.largest_overhead_area_visited = 0;
@@ -1087,7 +1080,8 @@ IRAM_ATTR void *cmpct_malloc_impl(cmpct_heap_t *heap, size_t size)
         return cmpct_alloc(heap, size);
     }
     lock(heap);
-    void *result = page_alloc(heap, PAGES_FOR_BYTES(size), GET_THREAD_LOCAL_TAG);
+    void *tag = GET_THREAD_LOCAL_TAG;
+    void *result = page_alloc(heap, PAGES_FOR_BYTES(size), tag);
     unlock(heap);
     return result;
 }
@@ -1317,6 +1311,8 @@ void cmpct_set_thread_tag(void *tag)
     first_allocations = false;
     assert(MULTI_HEAP_THREAD_TAG_INDEX < configNUM_THREAD_LOCAL_STORAGE_POINTERS);
     vTaskSetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX, tag);
+#else
+    pthread_setspecific(tls_key, tag);
 #endif
 }
 
@@ -1383,8 +1379,8 @@ void cmpct_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void
 
 #ifdef TEST_CMPCTMALLOC
 /* Run the tests with:
-   gcc -m32 -fsanitize=address -DTEST_CMPCTMALLOC -DDEBUG=1 -g -o test third_party/esp-idf/components/heap/third_party/dartino/cmpctmalloc.c && ./test
-   gcc      -fsanitize=address -DTEST_CMPCTMALLOC -DDEBUG=1 -g -o test third_party/esp-idf/components/heap/third_party/dartino/cmpctmalloc.c && ./test
+gcc -m32 -fsanitize=address -DTEST_CMPCTMALLOC -DDEBUG=1 -g -o test third_party/esp-idf/components/heap/third_party/dartino/cmpctmalloc.c -pthread && ./test
+gcc      -fsanitize=address -DTEST_CMPCTMALLOC -DDEBUG=1 -g -o test third_party/esp-idf/components/heap/third_party/dartino/cmpctmalloc.c -pthread && ./test
  */
 
 int main(int argc, char *argv[]) {
@@ -1468,6 +1464,7 @@ static cmpct_heap_t *initial_heap()
     }
     cmpct_heap_t *heap = cmpct_register_impl(pages, size);
     if (getenv("CMPCTMALLOC_DUMP_ON_EXIT") != NULL) atexit(dump_on_exit);
+    pthread_key_create(&tls_key, NULL);
     return heap;
 }
 
@@ -1523,6 +1520,11 @@ void *realloc(void *old, size_t size)
 typedef bool heap_caps_iterate_callback(void*, void*, void*, size_t);
 void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, heap_caps_iterate_callback callback, int flags) {
   cmpct_iterate_tagged_memory_areas(heap, user_data, tag, callback, flags);
+}
+
+void heap_caps_set_thread_tag(void *user_data)
+{
+    cmpct_set_thread_tag(user_data);
 }
 
 #endif
