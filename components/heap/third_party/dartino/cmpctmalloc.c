@@ -103,8 +103,14 @@ IRAM_ATTR inline static bool in_interrupt_service_routine()
 {
     int ps_register;
     __asm__ __volatile__("rsr.ps %0" : "=a"(ps_register));
-    bool result = (ps_register & 0xf) > 3;
-    if (result) *(char*)ps_register = 0;
+    const int interrupt_priority_mask = 0xf;
+    // During an interrupt the interrupt level is raised so that interrupts
+    // below a certain level are masked.  We have seen an interrupt level of 3
+    // (interrupt levels 0-3 are masked) while running normal code, so we now
+    // require a higher level to indicate that we are calling malloc from an
+    // interrupt, which is deprecated but may still happen.  We haven't seen it
+    // recently.
+    bool result = (ps_register & interrupt_priority_mask) > 3;
     return result;
 }
 
