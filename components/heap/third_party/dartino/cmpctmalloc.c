@@ -1399,8 +1399,8 @@ void cmpct_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void
 
 #ifdef TEST_CMPCTMALLOC
 /* Run the tests with:
-gcc -m32 -fsanitize=address -DTEST_CMPCTMALLOC -DDEBUG=1 -g -o test third_party/esp-idf/components/heap/third_party/dartino/cmpctmalloc.c -pthread && ./test
-gcc      -fsanitize=address -DTEST_CMPCTMALLOC -DDEBUG=1 -g -o test third_party/esp-idf/components/heap/third_party/dartino/cmpctmalloc.c -pthread && ./test
+gcc -m32 -ffreestanding -fsanitize=address -DTEST_CMPCTMALLOC -DDEBUG=1 -g -o test third_party/esp-idf/components/heap/third_party/dartino/cmpctmalloc.c -pthread && ./test
+gcc      -ffreestanding -fsanitize=address -DTEST_CMPCTMALLOC -DDEBUG=1 -g -o test third_party/esp-idf/components/heap/third_party/dartino/cmpctmalloc.c -pthread && ./test
  */
 
 int main(int argc, char *argv[])
@@ -1452,7 +1452,7 @@ int main(int argc, char *argv[])
 #ifdef CMPCTMALLOC_ON_LINUX
 /*
 # Create dynamic malloc library with:
-FLAGS="-DCMPCTMALLOC_ON_LINUX -fPIC -shared"
+FLAGS="-DCMPCTMALLOC_ON_LINUX -fPIC -ffreestanding -shared"
 CFILE=third_party/esp-idf/components/heap/third_party/dartino/cmpctmalloc.c
 gcc -m32 $FLAGS -g -o build/debug/bin/cmpctmalloc_32.so $CFILE
 gcc      $FLAGS -g -o build/debug64/bin/cmpctmalloc_64.so $CFILE
@@ -1513,14 +1513,8 @@ static int clzs(size_t size)
 void *calloc(size_t nelem, size_t elsize)
 {
     if (heap == NULL) heap = initial_heap();
-    if (elsize >= 0x40 && nelem > 0x400) {
-        // Check for multiplication overflow after fast case check failed.
-        const int word_bits = sizeof(size_t) * CHAR_BIT;
-        int bits = word_bits - clzs(nelem);
-        bits += word_bits - clzs(elsize);
-        if (bits > word_bits) return NULL;  // Multiplication ran out of bits.
-    }
-    size_t size = nelem * elsize;
+    size_t size;
+    if (__builtin_mul_overflow (elsize, nelem, &size)) return NULL;
     void *ptr = malloc(size);
     if (ptr != NULL) memset(ptr, 0, size);
     return ptr;
