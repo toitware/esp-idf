@@ -133,12 +133,11 @@ static int first_allocations = true;
 #define FATAL(reason) abort()
 #define INLINE __attribute__((always_inline)) inline
 
-// This is a two layer allocator.  Allocations > 4048 bytes are allocated from
-// a block allocator that gives out 4k aligned blocks.  Those less than 4048
-// bytes are allocated from cmpctmalloc.  This implementation of cmpctmalloc
-// only requests blocks from the block allocator that are 4k large, thus no
-// pointer returned from cmpctmalloc can be 4k aligned, but all allocations
-// of 4k or more are 4k aligned.
+// This is a two layer allocator.  Allocations that are a multiple of 4k in
+// size or > 16336 bytes are allocated from a block allocator that gives out 4k
+// aligned blocks.  Those less than 16336 bytes are allocated from cmpctmalloc.
+// All allocations requesting a size divisible by 4k are fulfilled with
+// addresses that are 4k aligned.
 
 // Malloc implementation tuned for space.
 //
@@ -156,6 +155,7 @@ static void page_free(cmpct_heap_t *heap, void *address, int pages_dummy);
 struct header_struct;
 static inline struct header_struct *right_header(struct header_struct *header);
 static inline struct header_struct *left_header(struct header_struct *header);
+static size_t page_number(cmpct_heap_t *heap, void *p);
 
 #ifdef DEBUG
 #define CMPCT_DEBUG
@@ -165,28 +165,20 @@ static inline struct header_struct *left_header(struct header_struct *header);
 #define FREE_FILL 0x77
 #define PADDING_FILL 0x55
 
-#define HEAP_GROW_SIZE (4 * 1024) /* Grow only one page at a time. */
-
 #define PAGE_SIZE_SHIFT 12
 #define PAGE_SIZE (1 << PAGE_SIZE_SHIFT)
 #define IS_PAGE_ALIGNED(x) (((uintptr_t)(x) & (PAGE_SIZE - 1)) == 0)
 #define PAGES_FOR_BYTES(x) (((x) + PAGE_SIZE - 1) >> PAGE_SIZE_SHIFT)
 
-STATIC_ASSERT(IS_PAGE_ALIGNED(HEAP_GROW_SIZE))
-
-// Individual allocations above 4kbytes are just fetched directly from the
+// Individual allocations above 16kbytes are just fetched directly from the
 // block allocator.
-#define HEAP_ALLOC_VIRTUAL_BITS 12
+#define HEAP_ALLOC_VIRTUAL_BITS 14
 // The biggest allocation on a page is limited by size of the biggest bucket.
 // With 8 buckets per order of magnitude the biggest bucket is bucker 7 (binary
 // 111) and so follows the pattern 1 111 0*.  Bucket sizes don't include the
 // header.
 #define SMALL_ALLOCATION_LIMIT ((0xf << (HEAP_ALLOC_VIRTUAL_BITS - 4)))
-
-// When we grow the heap we have to have somewhere in the freelist to put the
-// resulting freelist entry, so the freelist has to have a certain number of
-// buckets.
-STATIC_ASSERT(HEAP_GROW_SIZE <= (1u << HEAP_ALLOC_VIRTUAL_BITS))
+#define ROUNDED_SMALL_ALLOCATION_LIMIT (1 << HEAP_ALLOC_VIRTUAL_BITS)
 
 // Buckets for allocations.  The smallest 15 buckets are 8, 16, 24, etc. up to
 // 120 bytes.  After that we round up to the nearest size that can be written
@@ -286,7 +278,7 @@ struct multi_heap_info {
     Page pages[1];
 };
 
-static ssize_t heap_grow(cmpct_heap_t *heap, free_t **bucket);
+static ssize_t heap_grow(cmpct_heap_t *heap, free_t **bucket, int pages);
 
 IRAM_ATTR static void lock(cmpct_heap_t *heap)
 {
@@ -655,7 +647,7 @@ static void cmpct_test_get_back_newly_freed(cmpct_heap_t *heap)
             }
         }
     }
-    for (size_t i = 2048; i <= 4096; i++) {
+    for (size_t i = ROUNDED_SMALL_ALLOCATION_LIMIT / 2; i <= ROUNDED_SMALL_ALLOCATION_LIMIT; i++) {
         if (i <= SMALL_ALLOCATION_LIMIT) {
             cmpct_test_get_back_newly_freed_helper(heap, i);
         }
@@ -783,11 +775,11 @@ static void cmpct_test_tagged_allocations(cmpct_heap_t *heap)
     ASSERT(record.address == alloc_1);
     ASSERT(record.size == PAGE_SIZE);
 
-    alloc_2 = cmpct_malloc_impl(heap, PAGE_SIZE * 3 / 2);
+    alloc_2 = cmpct_malloc_impl(heap, ROUNDED_SMALL_ALLOCATION_LIMIT * 3 / 2);
     cmpct_iterate_tagged_memory_areas(heap, &record, &record, cmpct_test_visitor_free, 0);
     ASSERT(record.visited);  // It was found.
     ASSERT(record.address == alloc_2);
-    ASSERT(record.size == PAGE_SIZE * 2);
+    ASSERT(record.size == (ROUNDED_SMALL_ALLOCATION_LIMIT * 3) / 2);
 }
 
 static void cmpct_test_churn(cmpct_heap_t *heap)
@@ -839,8 +831,9 @@ IRAM_ATTR void *cmpct_alloc(cmpct_heap_t *heap, size_t size)
     lock(heap);
     int bucket = find_nonempty_bucket(heap, start_bucket);
     if (bucket == -1) {
-        // Grow heap by one page. If we can.
-        if (heap_grow(heap, NULL) < 0) {
+        // Grow heap by a few pages. If we can.
+        int pages_needed = ROUND_UP(size + ROUNDED_SMALL_ALLOCATION_LIMIT - SMALL_ALLOCATION_LIMIT, PAGE_SIZE) >> PAGE_SIZE_SHIFT;
+        if (heap_grow(heap, NULL, pages_needed) < 0) {
             unlock(heap);
             return NULL;
         }
@@ -976,18 +969,17 @@ IRAM_ATTR static void add_to_heap(cmpct_heap_t *heap, void *new_area, size_t siz
     create_allocation_header(right_sentinel, 0, free_size, NULL);
 }
 
-// Grab a page of memory from the page allocator.
+// Grab n pages of memory from the page allocator.
 // Called with the lock, apart from during init.
-IRAM_ATTR static ssize_t heap_grow(cmpct_heap_t *heap, free_t **bucket)
+IRAM_ATTR static ssize_t heap_grow(cmpct_heap_t *heap, free_t **bucket, int pages)
 {
-    ASSERT(HEAP_GROW_SIZE == PAGE_SIZE);
     // Allocate one page more.  The allocation tag is a pointer to the heap
     // itself so that it won't match any allocation tag used by the program.
-    void *ptr = page_alloc(heap, 1, heap);
+    void *ptr = page_alloc(heap, pages, heap);
     if (ptr == NULL) return -1;
-    LTRACEF("growing heap by 0x%zx bytes, new ptr %p\n", size, ptr);
-    add_to_heap(heap, ptr, PAGE_SIZE, bucket);
-    return PAGE_SIZE;
+    LTRACEF("growing heap by 0x%x bytes, new ptr %p\n", pages << PAGE_SIZE_SHIFT, ptr);
+    add_to_heap(heap, ptr, pages * PAGE_SIZE, bucket);
+    return pages * PAGE_SIZE;
 }
 
 void cmpct_init(cmpct_heap_t *heap)
@@ -1082,12 +1074,15 @@ cmpct_heap_t *cmpct_register_impl(void *start, size_t size)
 
 IRAM_ATTR void *cmpct_malloc_impl(cmpct_heap_t *heap, size_t size)
 {
-    if (size <= SMALL_ALLOCATION_LIMIT) {
+    // Allocations of page-aligned sizes go directly to the page allocator,
+    // but zero-length allocations can't be handled by the page allocator.
+    // Also, large allocations are handled by the page allocator.
+    if (size <= SMALL_ALLOCATION_LIMIT &&
+        (size == 0 || (size & (PAGE_SIZE - 1)) != 0)) {
         // The SMALL_ALLOCATION_LIMIT is determined by the biggest bucket, but
         // we also need to ensure the largest possible in-page space is large
         // enough.  A page has a given overhead, and a single almost-page-filling
         // allocation also needs a header.
-        ASSERT(SMALL_ALLOCATION_LIMIT <= PAGE_SIZE - arena_overhead + sizeof(header_t));
         return cmpct_alloc(heap, size);
     }
     lock(heap);
@@ -1097,14 +1092,23 @@ IRAM_ATTR void *cmpct_malloc_impl(cmpct_heap_t *heap, size_t size)
     return result;
 }
 
-IRAM_ATTR static bool is_page_allocated(void *p)
+IRAM_ATTR static bool is_page_allocated(cmpct_heap_t *heap, void *p)
 {
-    return p != NULL && ((size_t)p & (PAGE_SIZE - 1)) == 0;
+    if (p == NULL || ((size_t)p & (PAGE_SIZE - 1)) != 0) return false;
+    // The pointer is page-aligned, so it might be a page-allocation, or it
+    // could just be a normal allocation in the middle of a multi-page arena
+    // that happens to be aligned.
+    size_t page = page_number(heap, p);
+    // Only the first page in a multi-page allocation is marked as PAGE_IN_USE.
+    // The others are marked as PAGE_CONTINUED.  This also applies to multiple
+    // pages that were taken from the page allocator for use in a multi-page
+    // arena.
+    return heap->pages[page].status == PAGE_IN_USE;
 }
 
 IRAM_ATTR void cmpct_free_impl(cmpct_heap_t *heap, void *p)
 {
-    if (is_page_allocated(p)) {
+    if (is_page_allocated(heap, p)) {
         lock(heap);
         page_free(heap, p, 0);
         unlock(heap);
@@ -1118,7 +1122,6 @@ IRAM_ATTR void cmpct_free_impl(cmpct_heap_t *heap, void *p)
 IRAM_ATTR static size_t page_number(cmpct_heap_t *heap, void *p)
 {
     size_t offset = (char *)p - heap->page_base;
-    ASSERT(is_page_allocated(p));
     size_t page = offset >> PAGE_SIZE_SHIFT;
     ASSERT(heap->pages[page].status == PAGE_IN_USE);
     return page;
@@ -1127,7 +1130,7 @@ IRAM_ATTR static size_t page_number(cmpct_heap_t *heap, void *p)
 IRAM_ATTR size_t cmpct_get_allocated_size_impl(cmpct_heap_t *heap, void *p)
 {
     if (p == NULL) return 0;
-    if (!is_page_allocated(p)) {
+    if (!is_page_allocated(heap, p)) {
         size_t size = allocation_size(p);
         return size;
     }
@@ -1409,6 +1412,7 @@ int main(int argc, char *argv[])
     void *arena = malloc(TEST_HEAP_SIZE);
     cmpct_heap_t *heap = cmpct_register_impl(arena, TEST_HEAP_SIZE);
     cmpct_test_get_back_newly_freed(heap);
+    pthread_key_create(&tls_key, NULL);
     cmpct_test_tagged_allocations(heap);
     for (int i = 0; i < 1000; i++) {
         cmpct_test_churn(heap);
