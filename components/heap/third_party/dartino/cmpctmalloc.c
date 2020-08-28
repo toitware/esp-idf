@@ -977,7 +977,7 @@ IRAM_ATTR static ssize_t heap_grow(cmpct_heap_t *heap, free_t **bucket, int page
     // itself so that it won't match any allocation tag used by the program.
     void *ptr = page_alloc(heap, pages, heap);
     if (ptr == NULL) return -1;
-    LTRACEF("growing heap by 0x%zx bytes, new ptr %p\n", size, ptr);
+    LTRACEF("growing heap by 0x%x bytes, new ptr %p\n", pages << PAGE_SIZE_SHIFT, ptr);
     add_to_heap(heap, ptr, pages * PAGE_SIZE, bucket);
     return pages * PAGE_SIZE;
 }
