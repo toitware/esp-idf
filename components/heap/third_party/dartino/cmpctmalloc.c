@@ -1549,9 +1549,4 @@ void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, heap_caps
     cmpct_iterate_tagged_memory_areas(heap, user_data, tag, callback, flags);
 }
 
-void heap_caps_set_thread_tag(void *user_data)
-{
-    cmpct_set_option(heap, MALLOC_OPTION_THREAD_TAG, user_data);
-}
-
 #endif

@@ -327,16 +327,6 @@ void heap_caps_dump(uint32_t caps);
 void heap_caps_dump_all();
 
 /**
- * @brief Set the tag value to be attached to future allocations in this thread.
- *
- * This function is deprecated.  Use heap_caps_set_option with
- * MALLOC_OPTION_THREAD_TAG instead.
- *
- * @param tag         An opaque pointer that is attached to allocations.
- */
-void heap_caps_set_thread_tag(void *tag);
-
-/**
  * @brief Iterate over allocations for this thread that have not yet been freed.
  *
  * Each allocation is created with a tag that comes from the last call to
