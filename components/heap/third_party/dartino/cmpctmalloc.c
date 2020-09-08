@@ -83,7 +83,7 @@ size_t multi_heap_minimum_free_size(cmpct_heap_t *heap)
 void multi_heap_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void *tag, tagged_memory_callback_t callback, int flags)
     __attribute__((alias("cmpct_iterate_tagged_memory_areas")));
 
-void multi_heap_set_option(cmpct_heap_t *heap, int option, void* value)
+void multi_heap_set_option(cmpct_heap_t *heap, int option, void *value)
     __attribute__((alias("cmpct_set_option")));
 
 typedef uintptr_t addr_t;
@@ -149,7 +149,7 @@ void *cmpct_alloc(cmpct_heap_t *heap, size_t size);
 void cmpct_free(cmpct_heap_t *heap, void *payload);
 size_t cmpct_free_size_impl(cmpct_heap_t *heap);
 size_t cmpct_get_allocated_size_impl(cmpct_heap_t *heap, void *p);
-void cmpct_set_option(cmpct_heap_t* heap, int option, void *value);
+void cmpct_set_option(cmpct_heap_t *heap, int option, void *value);
 static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, void *tag);
 static void page_free(cmpct_heap_t *heap, void *address, int pages_dummy);
 struct header_struct;
