@@ -50,6 +50,12 @@ extern "C" {
 #define MALLOC_ITERATE_TAG_HEAP_OVERHEAD (-2)  /// Memory is used by malloc for internal accounting etc.
 
 /**
+ * Options for heap_caps_set_option
+ */
+#define MALLOC_OPTION_DISABLE_FREE 0 /// Value is false (null) or true (non-null).  Calls to free are ignored.
+#define MALLOC_OPTION_THREAD_TAG   1 /// The tag value to be attached to future allocations in this thread.
+
+/**
  * @brief Allocate a chunk of memory which has the given capabilities
  *
  * Equivalent semantics to libc malloc(), for capability-aware memory.
@@ -323,6 +329,9 @@ void heap_caps_dump_all();
 /**
  * @brief Set the tag value to be attached to future allocations in this thread.
  *
+ * This function is deprecated.  Use heap_caps_set_option with
+ * MALLOC_OPTION_THREAD_TAG instead.
+ *
  * @param tag         An opaque pointer that is attached to allocations.
  */
 void heap_caps_set_thread_tag(void *tag);
@@ -331,21 +340,29 @@ void heap_caps_set_thread_tag(void *tag);
  * @brief Iterate over allocations for this thread that have not yet been freed.
  *
  * Each allocation is created with a tag that comes from the last call to
- * heap_caps_set_thread_tag.  This function calls the callback for each
- * allocation that is not yet freed and has the given tag.  If the callback
- * returns true then the allocation is freed, otherwise it is preserved.  The
- * user_data argument is passed to the callback along with the tag and details
- * of the memory allocation.  If the tag is NULL then all allocations will be
- * iterated, but the callback can filter manually on the tag it is passed.
- * Note that the callback cannot allocate or deallocate, and this often means it
- * cannot call printf.
+ * heap_caps_set_option with the option MALLOC_OPTION_THREAD_TAG.  This
+ * function calls the callback for each allocation that is not yet freed and
+ * has the given tag.  If the callback returns true then the allocation is
+ * freed, otherwise it is preserved.  The user_data argument is passed to the
+ * callback along with the tag and details of the memory allocation.  If the
+ * tag is NULL then all allocations will be iterated, but the callback can
+ * filter manually on the tag it is passed.  Note that the callback cannot
+ * allocate or deallocate, and this often means it cannot call printf.
  *
  * @param user_data   A value that will be passed to each invocation of the callback.
- * @param tag         An opaque piece of data that was passed to heap_caps_set_thread_tag.
+ * @param tag         An opaque piece of data that was passed to heap_caps_set_option with the option MALLOC_OPTION_THREAD_TAG.
  * @param callback    A function to be called for each not-yet-freed memory area with the given tag.
  * @param flags       Zero or a set of flags, 'or'ed together from MALLOC_ITERATE_UNLOCKED, MALLOC_ITERATE_ALL_ALLOCATIONS and MALLOC_ITERATE_UNALLOCATED.
  */
 void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, tagged_memory_callback_t callback, int flags);
+
+/**
+ * @brief Set global flags and options for the malloc heap.
+ *
+ * @param option  Select the option to set.  See MALLOC_OPTION_DISABLE_FREE etc.
+ * @param value   A value that depends on the option being set.
+ */
+void heap_caps_set_option(int option, void *value);
 
 #ifdef __cplusplus
 }

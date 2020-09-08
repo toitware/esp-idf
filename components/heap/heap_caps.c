@@ -357,9 +357,9 @@ size_t heap_caps_get_minimum_free_size( uint32_t caps )
     return ret;
 }
 
-void heap_caps_set_thread_tag(void* tag)
+void heap_caps_set_thread_tag(void* value)
 {
-    multi_heap_set_thread_tag(tag);
+    multi_heap_set_option(NULL, MALLOC_OPTION_THREAD_TAG, value);
 }
 
 void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, tagged_memory_callback_t callback, int flags)
@@ -367,6 +367,14 @@ void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, tagged_me
     heap_t *heap;
     SLIST_FOREACH(heap, &registered_heaps, next) {
         multi_heap_iterate_tagged_memory_areas(heap->heap, user_data, tag, callback, flags);
+    }
+}
+
+void heap_caps_set_option(int option, void *value)
+{
+    heap_t *heap;
+    SLIST_FOREACH(heap, &registered_heaps, next) {
+        multi_heap_set_option(heap->heap, option, value);
     }
 }
 

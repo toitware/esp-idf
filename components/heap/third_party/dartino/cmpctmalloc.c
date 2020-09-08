@@ -80,11 +80,11 @@ size_t multi_heap_free_size(cmpct_heap_t *heap)
 size_t multi_heap_minimum_free_size(cmpct_heap_t *heap)
     __attribute__((alias("cmpct_minimum_free_size_impl")));
 
-void multi_heap_set_thread_tag(void *tag)
-    __attribute__((alias("cmpct_set_thread_tag")));
-
 void multi_heap_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void *tag, tagged_memory_callback_t callback, int flags)
     __attribute__((alias("cmpct_iterate_tagged_memory_areas")));
+
+void multi_heap_set_option(cmpct_heap_t *heap, int option, void* value)
+    __attribute__((alias("cmpct_set_option")));
 
 typedef uintptr_t addr_t;
 typedef uintptr_t vaddr_t;
@@ -149,7 +149,7 @@ void *cmpct_alloc(cmpct_heap_t *heap, size_t size);
 void cmpct_free(cmpct_heap_t *heap, void *payload);
 size_t cmpct_free_size_impl(cmpct_heap_t *heap);
 size_t cmpct_get_allocated_size_impl(cmpct_heap_t *heap, void *p);
-void cmpct_set_thread_tag(void *tag);
+void cmpct_set_option(cmpct_heap_t* heap, int option, void *value);
 static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, void *tag);
 static void page_free(cmpct_heap_t *heap, void *address, int pages_dummy);
 struct header_struct;
@@ -195,7 +195,7 @@ typedef struct header_struct {
     // left_size: Used to find the previous memory area in address order.
     // size: For the next memory area.  Both size fields include the header.
     size_t size_;
-    void *tag;  // Used for the pointer set by the user with heap_caps_set_thread_tag.
+    void *tag;  // Used for the pointer set by the user with heap_caps_set_option.
 } header_t;
 
 static INLINE size_t get_left_size(header_t *header)
@@ -247,7 +247,7 @@ typedef enum {
 // so that they work in IRAM on ESP32.
 typedef struct Page {
     uint32_t status;
-    void *tag;           // Used for the pointer set by the user with heap_caps_set_thread_tag.
+    void *tag;           // Used for the pointer set by the user with heap_caps_set_option.
 } Page;
 
 // Allocation arenas are linked together with this header.
@@ -263,6 +263,7 @@ struct multi_heap_info {
     size_t allocated_blocks;
     void *end_of_heap_structure;
     void *lock;
+    void *ignore_free;  // Actually a bool, but use void* so that it works in IRAM.
     free_t *free_lists[NUMBER_OF_BUCKETS];
     // We have some 32 bit words that tell us whether there is an entry in the
     // freelist.
@@ -688,7 +689,7 @@ static bool cmpct_test_visitor_free(void *r, void *tag, void *address, size_t si
 
 static void cmpct_test_tagged_allocations(cmpct_heap_t *heap)
 {
-    cmpct_set_thread_tag(NULL);  // From here, allocations are not tagged.
+    cmpct_set_option(MALLOC_OPTION_THREAD_TAG, NULL);  // From here, allocations are not tagged.
     void *alloc_1 = cmpct_alloc(heap, 113);
     void *alloc_2 = cmpct_alloc(heap, 113);
     cmpct_test_visit_record record;
@@ -697,7 +698,7 @@ static void cmpct_test_tagged_allocations(cmpct_heap_t *heap)
     cmpct_iterate_tagged_memory_areas(heap, &record, &record, cmpct_test_visitor_keep, 0);
     ASSERT(!record.visited);  // No allocations were tagged.
 
-    cmpct_set_thread_tag(&record);  // From here, allocations are tagged.
+    cmpct_set_option(MALLOC_OPTION_THREAD_TAG, &record);  // From here, allocations are tagged.
 
     record.largest_free_area_visited = 0;
     record.largest_overhead_area_visited = 0;
@@ -880,6 +881,7 @@ IRAM_ATTR void *cmpct_alloc(cmpct_heap_t *heap, size_t size)
 IRAM_ATTR void cmpct_free_optionally_locked(cmpct_heap_t *heap, void *payload, bool use_locking)
 {
     if (payload == NULL) return;
+    if (heap->ignore_free) return;
     header_t *header = (header_t *)payload - 1;
     if (is_tagged_as_free(header)) FATAL("Double free");
     size_t size = get_size(header);
@@ -995,6 +997,7 @@ void cmpct_init(cmpct_heap_t *heap)
     }
 
     heap->lock = NULL;
+    heap->ignore_free = NULL;
     heap->remaining = 0;
     heap->size = 0;
     heap->free_blocks = 0;
@@ -1329,15 +1332,19 @@ void multi_heap_set_lock(cmpct_heap_t *heap, void *lock)
     heap->lock = lock;
 }
 
-void cmpct_set_thread_tag(void *tag)
+void cmpct_set_option(cmpct_heap_t *heap, int option, void *value)
 {
+    if (option == MALLOC_OPTION_THREAD_TAG) {
 #if !defined(TEST_CMPCTMALLOC) && !defined(CMPCTMALLOC_ON_LINUX)
-    first_allocations = false;
-    assert(MULTI_HEAP_THREAD_TAG_INDEX < configNUM_THREAD_LOCAL_STORAGE_POINTERS);
-    vTaskSetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX, tag);
+        first_allocations = false;
+        assert(MULTI_HEAP_THREAD_TAG_INDEX < configNUM_THREAD_LOCAL_STORAGE_POINTERS);
+        vTaskSetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX, value);
 #else
-    pthread_setspecific(tls_key, tag);
+        pthread_setspecific(tls_key, value);
 #endif
+    } else if (option == MALLOC_OPTION_DISABLE_FREE) {
+        heap->ignore_free = value;
+    }
 }
 
 void cmpct_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void *tag, tagged_memory_callback_t callback, int flags)
@@ -1544,7 +1551,7 @@ void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, heap_caps
 
 void heap_caps_set_thread_tag(void *user_data)
 {
-    cmpct_set_thread_tag(user_data);
+    cmpct_set_option(heap, MALLOC_OPTION_THREAD_TAG, user_data);
 }
 
 #endif
