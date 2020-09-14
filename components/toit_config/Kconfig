@@ -1,0 +1,10 @@
+menu "Toit config"
+
+    config TOIT_BYTE_DISPLAY
+        bool "Include primitives for byte-oriented (true-color or 256-shade gray) displays"
+        default "y"
+
+    config TOIT_BIT_DISPLAY
+        bool "Include primitives for bit-oriented (2-color, 3-color, 4-shades) displays"
+        default "y"
+endmenu
