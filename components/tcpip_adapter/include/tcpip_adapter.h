@@ -19,6 +19,12 @@
 #ifndef _TCPIP_ADAPTER_H_
 #define _TCPIP_ADAPTER_H_
 
+#ifdef _ESP_NETIF_SUPPRESS_LEGACY_WARNING_
+#define TCPIP_ADAPTER_DEPRECATED
+#else
+#define TCPIP_ADAPTER_DEPRECATED __attribute__ ((deprecated))
+#endif
+
 #include "esp_netif.h"
 
 #include "tcpip_adapter_types.h"
@@ -31,7 +37,7 @@ extern "C" {
  * @brief tcpip adapter legacy init. It is used only to set the compatibility mode of esp-netif, which
  * will enable backward compatibility of esp-netif.
  */
-void tcpip_adapter_init(void)  __attribute__ ((deprecated));
+void tcpip_adapter_init(void)  TCPIP_ADAPTER_DEPRECATED;
 
 /**
  * @brief Compatiblity mode: convert the esp-netif handle to tcpip_adapter legacy interface enum
