@@ -135,13 +135,11 @@ int xt_clock_freq(void) __attribute__((deprecated));
 #define configASSERT(a) /* assertions disabled */
 #elif defined(CONFIG_FREERTOS_ASSERT_FAIL_PRINT_CONTINUE)
 #define configASSERT(a) if (unlikely(!(a))) {                               \
-        esp_rom_printf("%s:%d (%s)- assert failed!\n", __FILE__, __LINE__,  \
-                   __FUNCTION__);                                           \
+        ets_rom_printf("%s:%d assert failed!\n", __FILE__, __LINE__);       \
     }
 #else /* CONFIG_FREERTOS_ASSERT_FAIL_ABORT */
 #define configASSERT(a) if (unlikely(!(a))) {                               \
-        esp_rom_printf("%s:%d (%s)- assert failed!\n", __FILE__, __LINE__,  \
-                   __FUNCTION__);                                           \
+        ets_rom_printf("%s:%d (%s)- assert failed!\n", __FILE__, __LINE__); \
         abort();                                                            \
         }
 #endif
