@@ -70,7 +70,8 @@ typedef int sys_prot_t;
 
 #include <stdio.h>
 
-#define LWIP_PLATFORM_DIAG(x)   do {printf x;} while(0)
+// Toitware: Removed the "printf x;" here to save space.
+#define LWIP_PLATFORM_DIAG(x)   do {} while(0)
 // __assert_func is the assertion failure handler from newlib, defined in assert.h
 #define LWIP_PLATFORM_ASSERT(message) __assert_func(__FILE__, __LINE__, __ASSERT_FUNC, message)
 
