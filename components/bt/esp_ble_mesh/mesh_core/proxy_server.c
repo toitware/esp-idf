@@ -16,6 +16,7 @@
 #include "prov.h"
 #include "beacon.h"
 #include "access.h"
+#include "transport.h"
 #include "foundation.h"
 #include "proxy_server.h"
 
@@ -305,6 +306,14 @@ static void proxy_cfg(struct bt_mesh_proxy_client *client)
                              &rx, &buf);
     if (err) {
         BT_ERR("Failed to decode Proxy Configuration (err %d)", err);
+        return;
+    }
+
+    rx.local_match = 1U;
+
+    if (bt_mesh_rpl_check(&rx, NULL)) {
+        BT_WARN("Replay: src 0x%04x dst 0x%04x seq 0x%06x",
+                rx.ctx.addr, rx.ctx.recv_dst, rx.seq);
         return;
     }
 
@@ -1435,6 +1444,7 @@ int bt_mesh_proxy_server_init(void)
     return bt_mesh_gatts_set_local_device_name(device_name);
 }
 
+#if CONFIG_BLE_MESH_DEINIT
 int bt_mesh_proxy_server_deinit(void)
 {
     int i;
@@ -1465,5 +1475,6 @@ int bt_mesh_proxy_server_deinit(void)
 
     return 0;
 }
+#endif /* CONFIG_BLE_MESH_DEINIT */
 
 #endif /* (CONFIG_BLE_MESH_NODE && CONFIG_BLE_MESH_PB_GATT) || CONFIG_BLE_MESH_GATT_PROXY_SERVER */

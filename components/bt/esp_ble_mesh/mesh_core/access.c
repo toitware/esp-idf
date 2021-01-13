@@ -35,6 +35,11 @@ void bt_mesh_model_foreach(void (*func)(struct bt_mesh_model *mod,
 {
     int i, j;
 
+    if (dev_comp == NULL) {
+        BT_ERR("Invalid device composition");
+        return;
+    }
+
     for (i = 0; i < dev_comp->elem_count; i++) {
         struct bt_mesh_elem *elem = &dev_comp->elem[i];
 
@@ -359,6 +364,23 @@ static void mod_init(struct bt_mesh_model *mod, struct bt_mesh_elem *elem,
     }
 }
 
+int bt_mesh_comp_register(const struct bt_mesh_comp *comp)
+{
+    int err = 0;
+
+    /* There must be at least one element */
+    if (!comp->elem_count) {
+        return -EINVAL;
+    }
+
+    dev_comp = comp;
+
+    bt_mesh_model_foreach(mod_init, &err);
+
+    return err;
+}
+
+#if CONFIG_BLE_MESH_DEINIT
 static void mod_deinit(struct bt_mesh_model *mod, struct bt_mesh_elem *elem,
                        bool vnd, bool primary, void *user_data)
 {
@@ -399,22 +421,6 @@ static void mod_deinit(struct bt_mesh_model *mod, struct bt_mesh_elem *elem,
     }
 }
 
-int bt_mesh_comp_register(const struct bt_mesh_comp *comp)
-{
-    int err = 0;
-
-    /* There must be at least one element */
-    if (!comp->elem_count) {
-        return -EINVAL;
-    }
-
-    dev_comp = comp;
-
-    bt_mesh_model_foreach(mod_init, &err);
-
-    return err;
-}
-
 int bt_mesh_comp_deregister(void)
 {
     int err = 0;
@@ -429,6 +435,7 @@ int bt_mesh_comp_deregister(void)
 
     return err;
 }
+#endif /* CONFIG_BLE_MESH_DEINIT */
 
 void bt_mesh_comp_provision(u16_t addr)
 {

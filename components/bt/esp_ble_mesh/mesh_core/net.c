@@ -501,6 +501,7 @@ void bt_mesh_net_revoke_keys(struct bt_mesh_subnet *sub)
     BT_DBG("idx 0x%04x", sub->net_idx);
 
     memcpy(&sub->keys[0], &sub->keys[1], sizeof(sub->keys[0]));
+
     if (IS_ENABLED(CONFIG_BLE_MESH_SETTINGS)) {
         BT_DBG("Store updated NetKey persistently");
         bt_mesh_store_subnet(sub);
@@ -515,6 +516,7 @@ void bt_mesh_net_revoke_keys(struct bt_mesh_subnet *sub)
 
         memcpy(&key->keys[0], &key->keys[1], sizeof(key->keys[0]));
         key->updated = false;
+
         if (IS_ENABLED(CONFIG_BLE_MESH_SETTINGS)) {
             BT_DBG("Store updated AppKey persistently");
             bt_mesh_store_app_key(key);
@@ -535,6 +537,12 @@ bool bt_mesh_kr_update(struct bt_mesh_subnet *sub, u8_t new_kr, bool new_key)
         if (sub->kr_phase == BLE_MESH_KR_PHASE_1) {
             BT_INFO("Phase 1 -> Phase 2");
             sub->kr_phase = BLE_MESH_KR_PHASE_2;
+
+            if (IS_ENABLED(CONFIG_BLE_MESH_SETTINGS)) {
+                BT_DBG("Storing kr phase persistently");
+                bt_mesh_store_subnet(sub);
+            }
+
             return true;
         }
     } else {
@@ -553,12 +561,15 @@ bool bt_mesh_kr_update(struct bt_mesh_subnet *sub, u8_t new_kr, bool new_key)
          */
         case BLE_MESH_KR_PHASE_2:
             BT_INFO("KR Phase 0x%02x -> Normal", sub->kr_phase);
+
+            sub->kr_phase = BLE_MESH_KR_NORMAL;
             bt_mesh_net_revoke_keys(sub);
+
             if (IS_ENABLED(CONFIG_BLE_MESH_LOW_POWER) ||
                     IS_ENABLED(CONFIG_BLE_MESH_FRIEND)) {
                 friend_cred_refresh(sub->net_idx);
             }
-            sub->kr_phase = BLE_MESH_KR_NORMAL;
+
             return true;
         }
     }
@@ -581,6 +592,10 @@ void bt_mesh_rpl_reset(void)
                 (void)memset(rpl, 0, sizeof(*rpl));
             } else {
                 rpl->old_iv = true;
+            }
+
+            if (IS_ENABLED(CONFIG_BLE_MESH_SETTINGS)) {
+                bt_mesh_store_rpl(rpl);
             }
         }
     }
@@ -1557,7 +1572,8 @@ void bt_mesh_net_init(void)
     k_work_init(&bt_mesh.local_work, bt_mesh_net_local);
 }
 
-void bt_mesh_net_deinit(bool erase)
+#if CONFIG_BLE_MESH_DEINIT
+void bt_mesh_net_deinit(void)
 {
     k_delayed_work_free(&bt_mesh.ivu_timer);
 
@@ -1579,11 +1595,5 @@ void bt_mesh_net_deinit(bool erase)
 
     bt_mesh.iv_index = 0U;
     bt_mesh.seq = 0U;
-
-    memset(bt_mesh.flags, 0, sizeof(bt_mesh.flags));
-
-    if (erase && IS_ENABLED(CONFIG_BLE_MESH_SETTINGS)) {
-        bt_mesh_clear_seq();
-        bt_mesh_clear_iv();
-    }
 }
+#endif /* CONFIG_BLE_MESH_DEINIT */

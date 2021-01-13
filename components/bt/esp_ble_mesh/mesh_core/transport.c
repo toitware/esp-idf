@@ -116,46 +116,50 @@ static u16_t hb_sub_dst = BLE_MESH_ADDR_UNASSIGNED;
 static bt_mesh_mutex_t tx_seg_lock;
 static bt_mesh_mutex_t rx_seg_lock;
 
-static void bt_mesh_tx_seg_mutex_new(void)
+static inline void bt_mesh_tx_seg_mutex_new(void)
 {
     if (!tx_seg_lock.mutex) {
         bt_mesh_mutex_create(&tx_seg_lock);
     }
 }
 
-static void bt_mesh_tx_seg_mutex_free(void)
+#if CONFIG_BLE_MESH_DEINIT
+static inline void bt_mesh_tx_seg_mutex_free(void)
 {
     bt_mesh_mutex_free(&tx_seg_lock);
 }
+#endif /* CONFIG_BLE_MESH_DEINIT */
 
-static void bt_mesh_tx_seg_lock(void)
+static inline void bt_mesh_tx_seg_lock(void)
 {
     bt_mesh_mutex_lock(&tx_seg_lock);
 }
 
-static void bt_mesh_tx_seg_unlock(void)
+static inline void bt_mesh_tx_seg_unlock(void)
 {
     bt_mesh_mutex_unlock(&tx_seg_lock);
 }
 
-static void bt_mesh_rx_seg_mutex_new(void)
+static inline void bt_mesh_rx_seg_mutex_new(void)
 {
     if (!rx_seg_lock.mutex) {
         bt_mesh_mutex_create(&rx_seg_lock);
     }
 }
 
-static void bt_mesh_rx_seg_mutex_free(void)
+#if CONFIG_BLE_MESH_DEINIT
+static inline void bt_mesh_rx_seg_mutex_free(void)
 {
     bt_mesh_mutex_free(&rx_seg_lock);
 }
+#endif /* CONFIG_BLE_MESH_DEINIT */
 
-static void bt_mesh_rx_seg_lock(void)
+static inline void bt_mesh_rx_seg_lock(void)
 {
     bt_mesh_mutex_lock(&rx_seg_lock);
 }
 
-static void bt_mesh_rx_seg_unlock(void)
+static inline void bt_mesh_rx_seg_unlock(void)
 {
     bt_mesh_mutex_unlock(&rx_seg_lock);
 }
@@ -665,7 +669,7 @@ static void update_rpl(struct bt_mesh_rpl *rpl, struct bt_mesh_net_rx *rx)
  * updated (needed for segmented messages), whereas if a NULL match is given
  * the RPL is immediately updated (used for unsegmented messages).
  */
-static bool is_replay(struct bt_mesh_net_rx *rx, struct bt_mesh_rpl **match)
+bool bt_mesh_rpl_check(struct bt_mesh_net_rx *rx, struct bt_mesh_rpl **match)
 {
     int i;
 
@@ -1058,7 +1062,7 @@ static int trans_unseg(struct net_buf_simple *buf, struct bt_mesh_net_rx *rx,
         return -EINVAL;
     }
 
-    if (is_replay(rx, NULL)) {
+    if (bt_mesh_rpl_check(rx, NULL)) {
         BT_WARN("Replay: src 0x%04x dst 0x%04x seq 0x%06x",
                 rx->ctx.addr, rx->ctx.recv_dst, rx->seq);
         return -EINVAL;
@@ -1486,7 +1490,7 @@ static int trans_seg(struct net_buf_simple *buf, struct bt_mesh_net_rx *net_rx,
         return -EINVAL;
     }
 
-    if (is_replay(net_rx, &rpl)) {
+    if (bt_mesh_rpl_check(net_rx, &rpl)) {
         BT_WARN("Replay: src 0x%04x dst 0x%04x seq 0x%06x",
                 net_rx->ctx.addr, net_rx->ctx.recv_dst, net_rx->seq);
         return -EINVAL;
@@ -1768,7 +1772,7 @@ int bt_mesh_trans_recv(struct net_buf_simple *buf, struct bt_mesh_net_rx *rx)
     return err;
 }
 
-void bt_mesh_rx_reset(void)
+void bt_mesh_rx_reset(bool erase)
 {
     int i;
 
@@ -1778,10 +1782,10 @@ void bt_mesh_rx_reset(void)
         seg_rx_reset(&seg_rx[i], true);
     }
 
-    if (IS_ENABLED(CONFIG_BLE_MESH_SETTINGS)) {
+    (void)memset(bt_mesh.rpl, 0, sizeof(bt_mesh.rpl));
+
+    if (IS_ENABLED(CONFIG_BLE_MESH_SETTINGS) && erase) {
         bt_mesh_clear_rpl();
-    } else {
-        (void)memset(bt_mesh.rpl, 0, sizeof(bt_mesh.rpl));
     }
 }
 
@@ -1859,20 +1863,12 @@ void bt_mesh_trans_init(void)
     bt_mesh_rx_seg_mutex_new();
 }
 
+#if CONFIG_BLE_MESH_DEINIT
 void bt_mesh_trans_deinit(bool erase)
 {
     int i;
 
-    for (i = 0; i < ARRAY_SIZE(seg_rx); i++) {
-        seg_rx_reset(&seg_rx[i], true);
-    }
-
-    if (erase && IS_ENABLED(CONFIG_BLE_MESH_SETTINGS)) {
-        bt_mesh_clear_rpl();
-    } else {
-        bt_mesh_rpl_clear();
-    }
-
+    bt_mesh_rx_reset(erase);
     bt_mesh_tx_reset();
 
     for (i = 0; i < ARRAY_SIZE(seg_tx); i++) {
@@ -1886,12 +1882,7 @@ void bt_mesh_trans_deinit(bool erase)
     bt_mesh_tx_seg_mutex_free();
     bt_mesh_rx_seg_mutex_free();
 }
-
-void bt_mesh_rpl_clear(void)
-{
-    BT_DBG("%s", __func__);
-    (void)memset(bt_mesh.rpl, 0, sizeof(bt_mesh.rpl));
-}
+#endif /* CONFIG_BLE_MESH_DEINIT */
 
 void bt_mesh_heartbeat_send(void)
 {

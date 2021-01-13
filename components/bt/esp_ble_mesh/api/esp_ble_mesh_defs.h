@@ -17,6 +17,7 @@
 
 #include <stdint.h>
 
+#include "mesh_config.h"
 #include "mesh_common.h"
 #include "proxy_server.h"
 #include "provisioner_main.h"
@@ -468,8 +469,10 @@ typedef struct {
     /** Callback used during model initialization. Initialized by the stack. */
     esp_ble_mesh_cb_t init_cb;
 
+#if CONFIG_BLE_MESH_DEINIT
     /** Callback used during model deinitialization. Initialized by the stack. */
     esp_ble_mesh_cb_t deinit_cb;
+#endif /* CONFIG_BLE_MESH_DEINIT */
 } esp_ble_mesh_model_cbs_t;
 
 /** Abstraction that describes a Mesh Model instance.
@@ -818,6 +821,9 @@ typedef enum {
     ESP_BLE_MESH_NODE_PROXY_IDENTITY_ENABLE_COMP_EVT,           /*!< Enable BLE Mesh Proxy Identity advertising completion event */
     ESP_BLE_MESH_NODE_PROXY_GATT_ENABLE_COMP_EVT,               /*!< Enable BLE Mesh GATT Proxy Service completion event */
     ESP_BLE_MESH_NODE_PROXY_GATT_DISABLE_COMP_EVT,              /*!< Disable BLE Mesh GATT Proxy Service completion event */
+    ESP_BLE_MESH_NODE_ADD_LOCAL_NET_KEY_COMP_EVT,               /*!< Node add NetKey locally completion event */
+    ESP_BLE_MESH_NODE_ADD_LOCAL_APP_KEY_COMP_EVT,               /*!< Node add AppKey locally completion event */
+    ESP_BLE_MESH_NODE_BIND_APP_KEY_TO_MODEL_COMP_EVT,           /*!< Node bind AppKey to model locally completion event */
     ESP_BLE_MESH_PROVISIONER_PROV_ENABLE_COMP_EVT,              /*!< Provisioner enable provisioning functionality completion event */
     ESP_BLE_MESH_PROVISIONER_PROV_DISABLE_COMP_EVT,             /*!< Provisioner disable provisioning functionality completion event */
     ESP_BLE_MESH_PROVISIONER_RECV_UNPROV_ADV_PKT_EVT,           /*!< Provisioner receives unprovisioned device beacon event */
@@ -986,6 +992,31 @@ typedef union {
         int err_code;                           /*!< Indicate the result of disabling Mesh Proxy Service */
     } node_proxy_gatt_disable_comp;             /*!< Event parameter of ESP_BLE_MESH_NODE_PROXY_GATT_DISABLE_COMP_EVT */
     /**
+     * @brief ESP_BLE_MESH_NODE_ADD_LOCAL_NET_KEY_COMP_EVT
+     */
+    struct ble_mesh_node_add_local_net_key_comp_param {
+        int err_code;                           /*!< Indicate the result of adding local NetKey by the node */
+        uint16_t net_idx;                       /*!< NetKey Index */
+    } node_add_net_key_comp;                    /*!< Event parameter of ESP_BLE_MESH_NODE_ADD_LOCAL_NET_KEY_COMP_EVT */
+    /**
+     * @brief ESP_BLE_MESH_NODE_ADD_LOCAL_APP_KEY_COMP_EVT
+     */
+    struct ble_mesh_node_add_local_app_key_comp_param {
+        int err_code;                           /*!< Indicate the result of adding local AppKey by the node */
+        uint16_t net_idx;                       /*!< NetKey Index */
+        uint16_t app_idx;                       /*!< AppKey Index */
+    } node_add_app_key_comp;                    /*!< Event parameter of ESP_BLE_MESH_NODE_ADD_LOCAL_APP_KEY_COMP_EVT */
+    /**
+     * @brief ESP_BLE_MESH_NODE_BIND_APP_KEY_TO_MODEL_COMP_EVT
+     */
+    struct ble_mesh_node_bind_local_mod_app_comp_param {
+        int err_code;                           /*!< Indicate the result of binding AppKey with model by the node */
+        uint16_t element_addr;                  /*!< Element address */
+        uint16_t app_idx;                       /*!< AppKey Index */
+        uint16_t company_id;                    /*!< Company ID */
+        uint16_t model_id;                      /*!< Model ID */
+    } node_bind_app_key_to_model_comp;          /*!< Event parameter of ESP_BLE_MESH_NODE_BIND_APP_KEY_TO_MODEL_COMP_EVT */
+    /**
      * @brief ESP_BLE_MESH_PROVISIONER_RECV_UNPROV_ADV_PKT_EVT
      */
     struct ble_mesh_provisioner_recv_unprov_adv_pkt_param {
@@ -1132,6 +1163,7 @@ typedef union {
      */
     struct ble_mesh_provisioner_add_local_app_key_comp_param {
         int err_code;                           /*!< Indicate the result of adding local AppKey by the Provisioner */
+        uint16_t net_idx;                       /*!< NetKey Index */
         uint16_t app_idx;                       /*!< AppKey Index */
     } provisioner_add_app_key_comp;             /*!< Event parameter of ESP_BLE_MESH_PROVISIONER_ADD_LOCAL_APP_KEY_COMP_EVT */
     /**
@@ -1176,14 +1208,14 @@ typedef union {
     /**
      * @brief ESP_BLE_MESH_PROVISIONER_DELETE_NODE_WITH_UUID_COMP_EVT
      */
-    struct ble_mesh_provisioner_delete_node_with_uuid_comp_data_comp_param {
+    struct ble_mesh_provisioner_delete_node_with_uuid_comp_param {
         int err_code;                           /*!< Indicate the result of deleting node with uuid by the Provisioner */
         uint8_t uuid[16];                       /*!< Node device uuid */
     } provisioner_delete_node_with_uuid_comp;   /*!< Event parameter of ESP_BLE_MESH_PROVISIONER_DELETE_NODE_WITH_UUID_COMP_EVT */
     /**
      * @brief ESP_BLE_MESH_PROVISIONER_DELETE_NODE_WITH_ADDR_COMP_EVT
      */
-    struct ble_mesh_provisioner_delete_node_with_addr_comp_data_comp_param {
+    struct ble_mesh_provisioner_delete_node_with_addr_comp_param {
         int err_code;                           /*!< Indicate the result of deleting node with unicast address by the Provisioner */
         uint16_t unicast_addr;                  /*!< Node unicast address */
     } provisioner_delete_node_with_addr_comp;   /*!< Event parameter of ESP_BLE_MESH_PROVISIONER_DELETE_NODE_WITH_ADDR_COMP_EVT */
@@ -1974,8 +2006,8 @@ typedef struct {
     int64_t  timestamp; /*!< Time when the last message is received */
 } esp_ble_mesh_last_msg_info_t;
 
-#define ESP_BLE_MESH_SERVER_RSP_BY_APP  0   /*!< Response will be sent internally */
-#define ESP_BLE_MESH_SERVER_AUTO_RSP    1   /*!< Response need to be sent in the application */
+#define ESP_BLE_MESH_SERVER_RSP_BY_APP  0   /*!< Response need to be sent in the application */
+#define ESP_BLE_MESH_SERVER_AUTO_RSP    1   /*!< Response will be sent internally */
 
 /** Parameters of the Server Model response control */
 typedef struct {

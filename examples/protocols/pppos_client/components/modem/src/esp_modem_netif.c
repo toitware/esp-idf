@@ -53,7 +53,7 @@ static esp_err_t esp_modem_dte_transmit(void *h, void *buffer, size_t len)
  * @param esp_netif handle to esp-netif object
  * @param args pointer to modem-netif driver
  *
- * @return ESP_OK on success
+ * @return ESP_OK on success, modem-start error code if starting failed
  */
 static esp_err_t esp_modem_post_attach_start(esp_netif_t * esp_netif, void * args)
 {
@@ -66,8 +66,7 @@ static esp_err_t esp_modem_post_attach_start(esp_netif_t * esp_netif, void * arg
     };
     driver->base.netif = esp_netif;
     ESP_ERROR_CHECK(esp_netif_set_driver_config(esp_netif, &driver_ifconfig));
-    esp_modem_start_ppp(dte);
-    return ESP_OK;
+    return esp_modem_start_ppp(dte);
 }
 
 /**
@@ -143,6 +142,14 @@ esp_err_t esp_modem_netif_set_default_handlers(void *h, esp_netif_t * esp_netif)
         goto set_event_failed;
     }
     ret = esp_modem_set_event_handler(driver->dte, esp_netif_action_stop, ESP_MODEM_EVENT_PPP_STOP, esp_netif);
+    if (ret != ESP_OK) {
+        goto set_event_failed;
+    }
+    ret = esp_event_handler_register(IP_EVENT, IP_EVENT_PPP_GOT_IP, esp_netif_action_connected, esp_netif);
+    if (ret != ESP_OK) {
+        goto set_event_failed;
+    }
+    ret = esp_event_handler_register(IP_EVENT, IP_EVENT_PPP_LOST_IP, esp_netif_action_disconnected, esp_netif);
     if (ret != ESP_OK) {
         goto set_event_failed;
     }

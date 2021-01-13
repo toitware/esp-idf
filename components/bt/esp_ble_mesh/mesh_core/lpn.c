@@ -218,7 +218,7 @@ static void clear_friendship(bool force, bool disable)
         return;
     }
 
-    bt_mesh_rx_reset();
+    bt_mesh_rx_reset(true);
 
     k_delayed_work_cancel(&lpn->timer);
 
@@ -1090,6 +1090,7 @@ int bt_mesh_lpn_init(void)
     return 0;
 }
 
+#if CONFIG_BLE_MESH_DEINIT
 int bt_mesh_lpn_deinit(void)
 {
     struct bt_mesh_lpn *lpn = &bt_mesh.lpn;
@@ -1100,5 +1101,6 @@ int bt_mesh_lpn_deinit(void)
 
     return 0;
 }
+#endif /* CONFIG_BLE_MESH_DEINIT */
 
 #endif /* CONFIG_BLE_MESH_LOW_POWER */
