@@ -9,6 +9,8 @@ size_t cmpct_free_size_impl(multi_heap_handle_t heap);
 size_t cmpct_get_allocated_size_impl(multi_heap_handle_t heap, void *p);
 size_t cmpct_minimum_free_size_impl(multi_heap_handle_t heap);
 void cmpct_free_impl(multi_heap_handle_t heap, void *p);
+void *cmpct_aligned_alloc_impl(multi_heap_handle_t heap, size_t size, size_t alignment);
+void cmpct_aligned_free_impl(multi_heap_handle_t heap, void *p);
 void cmpct_get_info_impl(multi_heap_handle_t heap, multi_heap_info_t *info);
 void *cmpct_malloc_impl(multi_heap_handle_t heap, size_t size);
 void *cmpct_realloc_impl(multi_heap_handle_t heap, void *p, size_t size);
