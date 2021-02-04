@@ -1,5 +1,13 @@
 menu "Heap memory debugging"
 
+config CMPCT_MALLOC_HEAP
+    bool "Use Toitware's CmpctMalloc implementation"
+    default y
+    help
+        This uses the CmpctMalloc ported from Dartino and the LK kernel.
+        This is needed to ensure that 4k allocations are aligned, which
+        the Toit VM relies on.
+
     choice HEAP_CORRUPTION_DETECTION
         prompt "Heap corruption detection"
         default HEAP_POISONING_DISABLED
