@@ -433,9 +433,10 @@ void start_cpu0_default(void)
     esp_rom_spiflash_attach(ets_efuse_get_spiconfig(), false);
     esp_rom_spiflash_unlock();
 #else
-    // This assumes that DROM is the first segment in the application binary, i.e. that we can read
-    // the binary header through cache by accessing SOC_DROM_LOW address.
-    memcpy(&fhdr, (void*) SOC_DROM_LOW, sizeof(fhdr));
+    const esp_partition_t *partition = esp_ota_get_running_partition();
+    esp_partition_read(partition, 0, &fhdr, sizeof(esp_image_header_t));
+
+    assert(fhdr.magic == ESP_IMAGE_HEADER_MAGIC);
 #endif // CONFIG_APP_BUILD_TYPE_ELF_RAM
 
     // If psram is uninitialized, we need to improve some flash configuration.
