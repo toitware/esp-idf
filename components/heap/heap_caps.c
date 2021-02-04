@@ -16,6 +16,10 @@
 #include <assert.h>
 #include <stdio.h>
 #include <sys/param.h>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "multi_heap.h"
@@ -433,6 +437,28 @@ size_t heap_caps_get_minimum_free_size( uint32_t caps )
         }
     }
     return ret;
+}
+
+void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, tagged_memory_callback_t callback, int flags)
+{
+    heap_t *heap;
+    SLIST_FOREACH(heap, &registered_heaps, next) {
+        multi_heap_iterate_tagged_memory_areas(heap->heap, user_data, tag, callback, flags);
+    }
+}
+
+void heap_caps_set_option(int option, void *value)
+{
+    heap_t *heap;
+    if (option == MALLOC_OPTION_THREAD_TAG) {
+      // For efficiency we don't do this on every heap, since the setting is
+      // per-thread, not per-heap.
+      multi_heap_set_option(NULL, option, value);
+    } else {
+      SLIST_FOREACH(heap, &registered_heaps, next) {
+          multi_heap_set_option(heap->heap, option, value);
+      }
+    }
 }
 
 size_t heap_caps_get_largest_free_block( uint32_t caps )
