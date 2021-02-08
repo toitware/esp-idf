@@ -65,6 +65,12 @@ void multi_heap_free(cmpct_heap_t *heap, void *p)
 void *multi_heap_realloc(cmpct_heap_t *heap, void *p, size_t size)
     __attribute__((alias("cmpct_realloc_impl")));
 
+void *multi_heap_aligned_alloc(cmpct_heap_t *heap, size_t size, size_t alignment)
+    __attribute__((alias("cmpct_aligned_alloc_impl")));
+
+void multi_heap_aligned_free(cmpct_heap_t *heap, void *p)
+    __attribute__((alias("cmpct_free_impl")));
+
 size_t multi_heap_get_allocated_size(cmpct_heap_t *heap, void *p)
     __attribute__((alias("cmpct_get_allocated_size_impl")));
 
@@ -153,9 +159,11 @@ void cmpct_set_option(cmpct_heap_t *heap, int option, void *value);
 static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, void *tag);
 static void page_free(cmpct_heap_t *heap, void *address, int pages_dummy);
 struct header_struct;
+struct free_struct;
 static inline struct header_struct *right_header(struct header_struct *header);
 static inline struct header_struct *left_header(struct header_struct *header);
 static size_t page_number(cmpct_heap_t *heap, void *p);
+static void *allocation_tail(cmpct_heap_t *heap, struct free_struct *head, size_t size, size_t rounded_up, int bucket);
 
 #ifdef DEBUG
 #define CMPCT_DEBUG
@@ -187,6 +195,9 @@ static size_t page_number(cmpct_heap_t *heap, void *p);
 // size.  On 64 bit, the 8 byte bucket is useless, since the freelist header
 // is 16 bytes larger than the header, but we have it for simplicity.
 #define NUMBER_OF_BUCKETS (1 + 15 + (HEAP_ALLOC_VIRTUAL_BITS - 7) * 8)
+
+// Everything that happens on the heap is 8-byte aligned.
+#define NATURAL_ALIGNMENT 8
 
 // All individual memory areas on the heap start with this.
 typedef struct header_struct {
@@ -368,7 +379,7 @@ IRAM_ATTR static int size_to_index_helper(
 // Round up size to next bucket when allocating.
 IRAM_ATTR static int size_to_index_allocating(size_t size, size_t *rounded_up_out)
 {
-    size_t rounded = ROUND_UP(size, 8);
+    size_t rounded = ROUND_UP(size, NATURAL_ALIGNMENT);
     return size_to_index_helper(rounded, rounded_up_out, -8, 1);
 }
 
@@ -441,6 +452,7 @@ IRAM_ATTR static void create_free_area(cmpct_heap_t *heap, void *address, size_t
     set_left_size(&free_area->header, tag_as_free(left_size));
     if (bucket == NULL) {
         int index = size_to_index_freeing(size - sizeof(header_t));
+        ASSERT(index >= 0);
         set_free_list_bit(heap, index);
         bucket = &heap->free_lists[index];
     }
@@ -492,6 +504,7 @@ IRAM_ATTR static void unlink_free(cmpct_heap_t *heap, free_t *free_area, int buc
     heap->free_blocks--;
     ASSERT(heap->remaining < 4000000000u);
     ASSERT(heap->free_blocks < 4000000000u);
+    ASSERT(bucket >= 0 && bucket < NUMBER_OF_BUCKETS);
     free_t *next = free_area->next;
     free_t *prev = free_area->prev;
     if (heap->free_lists[bucket] == free_area) {
@@ -541,11 +554,11 @@ IRAM_ATTR static void *create_allocation_header(
 void cmpct_test_buckets(void)
 {
     size_t rounded;
-    unsigned bucket;
-    // Check for the 8-spaced buckets up to 128.
-    for (unsigned i = 1; i <= 128; i++) {
+    unsigned bucket; // Check for the 8-spaced buckets up to 128.
+    for (unsigned i = 0; i <= 128; i++) {
         // Round up when allocating.
         bucket = size_to_index_allocating(i, &rounded);
+        ASSERT(bucket >= 0 && bucket < NUMBER_OF_BUCKETS);
         unsigned expected = (ROUND_UP(i, 8) >> 3) - 1;
         USE(expected);
         USE(bucket);
@@ -570,6 +583,7 @@ void cmpct_test_buckets(void)
         for (unsigned i = j * 8; i <= j * 16; i++) {
             // Round up to j multiple in this range when allocating.
             bucket = size_to_index_allocating(i, &rounded);
+            ASSERT(bucket >= 0 && bucket < NUMBER_OF_BUCKETS);
             unsigned expected = bucket_base + ROUND_UP(i, j) / j;
             USE(expected);
             ASSERT(bucket == expected);
@@ -793,6 +807,7 @@ static void cmpct_test_churn(cmpct_heap_t *heap)
     char *allocations[TEST_ITERATIONS] = { NULL };
     for (int i = 0; i < TEST_ITERATIONS; i++) {
         int free_index = (i + 500) % TEST_ITERATIONS;
+<<<<<<< HEAD
         cmpct_free(heap, allocations[free_index]);
         allocations[free_index] = NULL;
         size_t size = cmpct_test_random_next() & 0xff;
@@ -802,19 +817,57 @@ static void cmpct_test_churn(cmpct_heap_t *heap)
         // entries are so big.
         if (sizeof(void *) == 4) {
             ASSERT(cmpct_get_allocated_size_impl(heap, allocations[i]) <= size * 1.06 + sizeof(free_t));
+=======
+        cmpct_free_impl(heap, allocations[free_index]);
+        allocations[free_index] = NULL;
+        size_t size = cmpct_test_random_next() & 0xff;
+        if (aligned) {
+            uintptr_t alignment = 1 << ((i / 2) % 13);
+            allocations[i] = cmpct_aligned_alloc_impl(heap, size, alignment);
+            ASSERT((((uintptr_t)allocations[i]) & (alignment - 1)) == 0);
+        } else {
+            allocations[i] = cmpct_malloc_impl(heap, size);
+            ASSERT(cmpct_get_allocated_size_impl(heap, allocations[i]) >= size);
+            // Waste is rather more on 64 bit because the doubly-linked freelist
+            // entries are so big.
+            if (sizeof(void *) == 4) {
+                ASSERT(cmpct_get_allocated_size_impl(heap, allocations[i]) <= size * 1.06 + sizeof(free_t));
+            }
+>>>>>>> 465d8a534f... Aligned allocation semantics for esp-idf 4.3
         }
         for (size_t j = 0; j < size; j++) {
             allocations[i][j] = cmpct_test_random_next();
         }
     }
     for (int i = 0; i < TEST_ITERATIONS; i++) {
+<<<<<<< HEAD
         cmpct_free(heap, allocations[i]);
+=======
+        cmpct_free_impl(heap, allocations[i]);
+>>>>>>> 465d8a534f... Aligned allocation semantics for esp-idf 4.3
     }
     ASSERT(remaining == cmpct_free_size_impl(heap));
     ASSERT(heap_size == heap->size);
 }
 
 #endif  // TEST_CMPCTMALLOC
+
+IRAM_ATTR static int get_bucket_for_size(cmpct_heap_t *heap, size_t size, int start_bucket)
+{
+    int bucket = find_nonempty_bucket(heap, start_bucket);
+    if (bucket == -1) {
+        // Grow heap by a few pages. If we can.
+        int pages_needed = ROUND_UP(size + ROUNDED_SMALL_ALLOCATION_LIMIT - SMALL_ALLOCATION_LIMIT, PAGE_SIZE) >> PAGE_SIZE_SHIFT;
+        if (heap_grow(heap, NULL, pages_needed) < 0) {
+            unlock(heap);
+            return -1;
+        }
+        bucket = find_nonempty_bucket(heap, start_bucket);
+        // Allocation is always less than one page so this must succeed.
+        ASSERT(bucket >= 0 && bucket < NUMBER_OF_BUCKETS);
+    }
+    return bucket;
+}
 
 IRAM_ATTR void *cmpct_alloc(cmpct_heap_t *heap, size_t size)
 {
@@ -830,22 +883,22 @@ IRAM_ATTR void *cmpct_alloc(cmpct_heap_t *heap, size_t size)
     rounded_up += sizeof(header_t);
 
     lock(heap);
-    int bucket = find_nonempty_bucket(heap, start_bucket);
-    if (bucket == -1) {
-        // Grow heap by a few pages. If we can.
-        int pages_needed = ROUND_UP(size + ROUNDED_SMALL_ALLOCATION_LIMIT - SMALL_ALLOCATION_LIMIT, PAGE_SIZE) >> PAGE_SIZE_SHIFT;
-        if (heap_grow(heap, NULL, pages_needed) < 0) {
-            unlock(heap);
-            return NULL;
-        }
-        bucket = find_nonempty_bucket(heap, start_bucket);
-        // Allocation is always less than one page so this must succeed.
-        ASSERT(bucket != -1);
-    }
+
+    int bucket = get_bucket_for_size(heap, size, start_bucket);
+    if (bucket == -1) return NULL;
+
     free_t *head = heap->free_lists[bucket];
+    return allocation_tail(heap, head, size, rounded_up, bucket);
+}
+
+// Takes a block on the free list, unlinks it, possibly creates a new freelist
+// entry from the excess, and returns the newly allocated memory.  On entry the
+// heap should be locked.  Unlocks the heap.
+IRAM_ATTR static void *allocation_tail(cmpct_heap_t *heap, free_t *head, size_t size, size_t rounded_up, int bucket)
+{
     header_t *block = &head->header;
     size_t block_size = get_size(block);
-    size_t rest = get_size(block) - rounded_up;
+    size_t rest = block_size - rounded_up;
     // We can't carve off the rest for a new free space if it's smaller than
     // the free-list linked structure.  We also don't carve it off if it's less
     // than 3.2% the size of the allocation.  This is to avoid small long-lived
@@ -1090,9 +1143,87 @@ IRAM_ATTR void *cmpct_malloc_impl(cmpct_heap_t *heap, size_t size)
     }
     lock(heap);
     void *tag = GET_THREAD_LOCAL_TAG;
+<<<<<<< HEAD
     void *result = page_alloc(heap, PAGES_FOR_BYTES(size), tag);
     unlock(heap);
     return result;
+=======
+    void *result = page_alloc(heap, PAGES_FOR_BYTES(size), PAGE_SIZE, tag);
+    unlock(heap);
+    return result;
+}
+
+IRAM_ATTR void *cmpct_aligned_alloc_impl(cmpct_heap_t *heap, size_t size, size_t alignment) {
+    // Only allow powers of 2 as alignments.
+    if (((alignment - 1) & alignment) != 0) return NULL;
+
+    // The page allocator already has the ability to return allocations that
+    // are more aligned than the page size.
+    if (alignment >= PAGE_SIZE / 2) {
+        // We take 2k (half-page) allocations in here too, because treating them as
+        // page allocations will waste 2k, but putting them in the normal system
+        // actually wastes even more.
+        lock(heap);
+        void *tag = GET_THREAD_LOCAL_TAG;
+        void *result = page_alloc(heap, PAGES_FOR_BYTES(size), alignment, tag);
+        unlock(heap);
+        return result;
+    }
+
+    if (alignment <= NATURAL_ALIGNMENT) return cmpct_alloc(heap, size);
+
+    size = ROUND_UP(size, NATURAL_ALIGNMENT);
+
+    // Our approach to aligned allocations requires us to temporarily create a
+    // free space of the required size, so there's a minimum size below which
+    // it doesn't work.
+    if (size < sizeof(free_t)) size = sizeof(free_t);
+
+    // This gives us at least one alignment of slack to position the returned
+    // pointer, plus space for the header.  Worst case looking from the back of
+    // the allocation is that there almost an alignment-worth of waste at the
+    // end, the allocation requested, then an allocation header,
+    // sizeof(header_t), then a free list entry, sizeof(free_t).
+    size_t aligned_size = size + alignment - NATURAL_ALIGNMENT + sizeof(header_t) + sizeof(free_t);
+
+    size_t dummy;
+    int start_bucket = size_to_index_allocating(aligned_size, &dummy);
+
+    lock(heap);
+
+    int bucket = get_bucket_for_size(heap, aligned_size, start_bucket);
+    if (bucket == -1) return NULL;  // Out of memory.
+
+    free_t *head = heap->free_lists[bucket];
+    header_t *block = &head->header;
+    uintptr_t first_possible_location = (uintptr_t)(block + 1);
+    uintptr_t location = ROUND_UP(first_possible_location, alignment);
+    size_t size_with_header = size + sizeof(header_t);
+    if (location == first_possible_location) {
+        // Luckily already aligned.
+        return allocation_tail(heap, head, size, size_with_header, bucket);
+    }
+    while (location - first_possible_location < sizeof(free_t)) {
+        // No space for the free list header.
+        location += alignment;
+    }
+    // We are splitting a free block into an unneeded part on the left and an
+    // aligned part.
+    header_t *right = right_header(block);
+    unlink_free(heap, head, bucket);
+    size_t unneeded_free_size = location - first_possible_location;
+    size_t aligned_part_size = get_size(block) - unneeded_free_size;
+    create_free_area(heap, head, get_left_size(block), unneeded_free_size, NULL);
+    header_t *aligned_header = (header_t *)location - 1;
+    // Note: This is the only moment where there are two free areas adjacent to
+    // each other.  Normally we coalesce agressively.
+    create_free_area(heap, aligned_header, unneeded_free_size, aligned_part_size, NULL);
+    fix_left_size(right, aligned_header);
+
+    // Create the allocation from the aligned area, possibly freeing the excess
+    // on the right.
+    return allocation_tail(heap, (free_t *)aligned_header, size, size_with_header, size_to_index_freeing(aligned_part_size - sizeof(header_t)));
+>>>>>>> 465d8a534f... Aligned allocation semantics for esp-idf 4.3
 }
 
 IRAM_ATTR static bool is_page_allocated(cmpct_heap_t *heap, void *p)
@@ -1373,7 +1504,10 @@ void cmpct_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void
             }
             callback(user_data, (void *)CMPCTMALLOC_ITERATE_TAG_HEAP_OVERHEAD, start_of_overhead, first_possible_allocation - (uintptr_t)start_of_overhead);
         }
-        for (header_t *header = (header_t *)(arena + 1) + 1; true; header = right_header(header)) {
+        header_t *previous = (header_t *)(arena + 1);
+        for (header_t *header = previous + 1; true; header = right_header(header)) {
+            ASSERT(left_header(header) == previous);
+            previous = header;
             if ((flags & CMPCTMALLOC_ITERATE_UNUSED) != 0) {
                 callback(user_data, (void *)CMPCTMALLOC_ITERATE_TAG_HEAP_OVERHEAD, header, sizeof(header_t));
             }
