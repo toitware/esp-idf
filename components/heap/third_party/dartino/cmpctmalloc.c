@@ -554,7 +554,7 @@ IRAM_ATTR static void *create_allocation_header(
 void cmpct_test_buckets(void)
 {
     size_t rounded;
-    unsigned bucket; // Check for the 8-spaced buckets up to 128.
+    int bucket; // Check for the 8-spaced buckets up to 128.
     for (unsigned i = 0; i <= 128; i++) {
         // Round up when allocating.
         bucket = size_to_index_allocating(i, &rounded);
