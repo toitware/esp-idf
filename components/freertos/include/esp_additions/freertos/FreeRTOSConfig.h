@@ -42,7 +42,7 @@
 
 #if defined(CONFIG_FREERTOS_ASSERT_FAIL_PRINT_CONTINUE)
 #define configASSERT(a) if (unlikely(!(a))) {                               \
-        ets_rom_printf("%s:%d assert failed!\n", __FILE__, __LINE__);       \
+        esp_rom_printf("%s:%d assert failed!\n", __FILE__, __LINE__);       \
     }
 #elif defined(CONFIG_FREERTOS_ASSERT_FAIL_ABORT)
 #define configASSERT(a) assert(a)
