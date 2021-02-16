@@ -164,7 +164,7 @@ class EntityNode():
         commands = collections.defaultdict(list)
 
         def process_commands(cmds):
-            for (target, commands_list) in cmds.items():
+            for (target, commands_list) in sorted(cmds.items()):
                 commands[target].extend(commands_list)
 
         # Process the commands generated from this node
@@ -388,7 +388,7 @@ class Generation:
         scheme_dictionary = collections.defaultdict(dict)
 
         # Collect sections into buckets based on target name
-        for scheme in self.schemes.values():
+        for scheme in sorted(self.schemes.values()):
             sections_bucket = collections.defaultdict(list)
 
             for (sections_name, target_name) in scheme.entries:
@@ -407,8 +407,8 @@ class Generation:
             scheme_dictionary[scheme.name] = sections_bucket
 
         # Search for and raise exception on first instance of sections mapped to multiple targets
-        for (scheme_name, sections_bucket) in scheme_dictionary.items():
-            for sections_a, sections_b in itertools.combinations(sections_bucket.values(), 2):
+        for (scheme_name, sections_bucket) in sorted(scheme_dictionary.items()):
+            for sections_a, sections_b in itertools.combinations(sorted(sections_bucket.values()), 2):
                 set_a = set()
                 set_b = set()
 
@@ -437,7 +437,7 @@ class Generation:
 
         entity_mappings = dict()
 
-        for mapping in self.mappings.values():
+        for mapping in sorted(self.mappings.values()):
             archive = mapping.archive
 
             for (obj, symbol, scheme_name) in mapping.entries:
@@ -465,7 +465,7 @@ class Generation:
                     flags = None
 
                 # Create placement for each 'section -> target' in the scheme.
-                for (target, sections) in scheme_dictionary[scheme_name].items():
+                for (target, sections) in sorted(scheme_dictionary[scheme_name].items()):
                     for section in sections:
                         # Find the applicable flags
                         _flags = []
