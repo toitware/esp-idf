@@ -101,8 +101,15 @@ extern void esp_apb_backup_dma_lock_init(void);
 // App entry point for core 0
 extern void esp_startup_start_app(void);
 
+void start_cpu0_default(void) __attribute__((noreturn));
+
 // Entry point for core 0 from hardware init (port layer)
-void start_cpu0(void) __attribute__((weak, alias("start_cpu0_default"))) __attribute__((noreturn));
+extern void start_cpu0(void) __attribute__((weak)) __attribute__((noreturn));
+
+void start_cpu0(void)
+{
+    start_cpu0_default();
+}
 
 #if !CONFIG_ESP_SYSTEM_SINGLE_CORE_MODE
 // Entry point for core [1..X] from hardware init (port layer)
@@ -353,7 +360,7 @@ static void do_secondary_init(void)
 #endif
 }
 
-static void start_cpu0_default(void)
+void start_cpu0_default(void)
 {
 
     ESP_EARLY_LOGI(TAG, "Pro cpu start user code");
