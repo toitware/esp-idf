@@ -17,6 +17,8 @@
 
 #if defined(TEST_CMPCTMALLOC) || defined (CMPCTMALLOC_ON_LINUX)
 
+#include "../../include/esp_heap_caps.h"
+
 #include <limits.h>
 #include <stdlib.h>
 #include <sys/mman.h>
@@ -156,7 +158,7 @@ void cmpct_free(cmpct_heap_t *heap, void *payload);
 size_t cmpct_free_size_impl(cmpct_heap_t *heap);
 size_t cmpct_get_allocated_size_impl(cmpct_heap_t *heap, void *p);
 void cmpct_set_option(cmpct_heap_t *heap, int option, void *value);
-static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, void *tag);
+static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, uintptr_t alignment, void *tag);
 static void page_free(cmpct_heap_t *heap, void *address, int pages_dummy);
 struct header_struct;
 struct free_struct;
@@ -703,7 +705,7 @@ static bool cmpct_test_visitor_free(void *r, void *tag, void *address, size_t si
 
 static void cmpct_test_tagged_allocations(cmpct_heap_t *heap)
 {
-    cmpct_set_option(MALLOC_OPTION_THREAD_TAG, NULL);  // From here, allocations are not tagged.
+    cmpct_set_option(heap, MALLOC_OPTION_THREAD_TAG, NULL);  // From here, allocations are not tagged.
     void *alloc_1 = cmpct_alloc(heap, 113);
     void *alloc_2 = cmpct_alloc(heap, 113);
     cmpct_test_visit_record record;
@@ -712,7 +714,7 @@ static void cmpct_test_tagged_allocations(cmpct_heap_t *heap)
     cmpct_iterate_tagged_memory_areas(heap, &record, &record, cmpct_test_visitor_keep, 0);
     ASSERT(!record.visited);  // No allocations were tagged.
 
-    cmpct_set_option(MALLOC_OPTION_THREAD_TAG, &record);  // From here, allocations are tagged.
+    cmpct_set_option(heap, MALLOC_OPTION_THREAD_TAG, &record);  // From here, allocations are tagged.
 
     record.largest_free_area_visited = 0;
     record.largest_overhead_area_visited = 0;
@@ -806,23 +808,30 @@ static void cmpct_test_churn(cmpct_heap_t *heap)
 #define TEST_ITERATIONS 4096
     char *allocations[TEST_ITERATIONS] = { NULL };
     for (int i = 0; i < TEST_ITERATIONS; i++) {
+        bool aligned = (i & 3) == 0;
         int free_index = (i + 500) % TEST_ITERATIONS;
-        cmpct_free(heap, allocations[free_index]);
+        cmpct_free_impl(heap, allocations[free_index]);
         allocations[free_index] = NULL;
         size_t size = cmpct_test_random_next() & 0xff;
-        allocations[i] = cmpct_alloc(heap, size);
-        ASSERT(cmpct_get_allocated_size_impl(heap, allocations[i]) >= size);
-        // Waste is rather more on 64 bit because the doubly-linked freelist
-        // entries are so big.
-        if (sizeof(void *) == 4) {
-            ASSERT(cmpct_get_allocated_size_impl(heap, allocations[i]) <= size * 1.06 + sizeof(free_t));
+        if (aligned) {
+            uintptr_t alignment = 1 << ((i / 2) % 13);
+            allocations[i] = cmpct_aligned_alloc_impl(heap, size, alignment);
+            ASSERT((((uintptr_t)allocations[i]) & (alignment - 1)) == 0);
+        } else {
+            allocations[i] = cmpct_malloc_impl(heap, size);
+            ASSERT(cmpct_get_allocated_size_impl(heap, allocations[i]) >= size);
+            // Waste is rather more on 64 bit because the doubly-linked freelist
+            // entries are so big.
+            if (sizeof(void *) == 4) {
+                ASSERT(cmpct_get_allocated_size_impl(heap, allocations[i]) <= size * 1.06 + sizeof(free_t));
+            }
         }
         for (size_t j = 0; j < size; j++) {
             allocations[i][j] = cmpct_test_random_next();
         }
     }
     for (int i = 0; i < TEST_ITERATIONS; i++) {
-        cmpct_free(heap, allocations[i]);
+        cmpct_free_impl(heap, allocations[i]);
     }
     ASSERT(remaining == cmpct_free_size_impl(heap));
     ASSERT(heap_size == heap->size);
@@ -1008,7 +1017,7 @@ IRAM_ATTR static ssize_t heap_grow(cmpct_heap_t *heap, free_t **bucket, int page
 {
     // Allocate one page more.  The allocation tag is a pointer to the heap
     // itself so that it won't match any allocation tag used by the program.
-    void *ptr = page_alloc(heap, pages, heap);
+    void *ptr = page_alloc(heap, pages, PAGE_SIZE, heap);
     if (ptr == NULL) return -1;
     LTRACEF("growing heap by 0x%x bytes, new ptr %p\n", pages << PAGE_SIZE_SHIFT, ptr);
     add_to_heap(heap, ptr, pages * PAGE_SIZE, bucket);
@@ -1344,10 +1353,11 @@ size_t cmpct_minimum_free_size_impl(cmpct_heap_t *heap)
 }
 
 // Called with the lock.
-IRAM_ATTR static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, void *tag)
+IRAM_ATTR static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, uintptr_t alignment, void *tag)
 {
     for (int i = 0; i <= heap->number_of_pages - pages; i++) {
-        if (heap->pages[i].status == PAGE_FREE) {
+        uintptr_t start_address = (uintptr_t)(heap->page_base + i * PAGE_SIZE);
+        if (heap->pages[i].status == PAGE_FREE && (start_address & (alignment - 1)) == 0) {
             bool big_enough = true;
             for (int j = 1; j < pages; j++) {
                 if (heap->pages[i + j].status != PAGE_FREE) {
@@ -1521,7 +1531,7 @@ gcc      -ffreestanding -fsanitize=address -DTEST_CMPCTMALLOC -DDEBUG=1 -g -o te
 
 int main(int argc, char *argv[])
 {
-    int TEST_HEAP_SIZE = 900000;
+    int TEST_HEAP_SIZE = 1500000;
     void *arena = malloc(TEST_HEAP_SIZE);
     cmpct_heap_t *heap = cmpct_register_impl(arena, TEST_HEAP_SIZE);
     cmpct_test_get_back_newly_freed(heap);
