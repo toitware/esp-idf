@@ -807,7 +807,6 @@ static void cmpct_test_churn(cmpct_heap_t *heap)
     char *allocations[TEST_ITERATIONS] = { NULL };
     for (int i = 0; i < TEST_ITERATIONS; i++) {
         int free_index = (i + 500) % TEST_ITERATIONS;
-<<<<<<< HEAD
         cmpct_free(heap, allocations[free_index]);
         allocations[free_index] = NULL;
         size_t size = cmpct_test_random_next() & 0xff;
@@ -817,34 +816,13 @@ static void cmpct_test_churn(cmpct_heap_t *heap)
         // entries are so big.
         if (sizeof(void *) == 4) {
             ASSERT(cmpct_get_allocated_size_impl(heap, allocations[i]) <= size * 1.06 + sizeof(free_t));
-=======
-        cmpct_free_impl(heap, allocations[free_index]);
-        allocations[free_index] = NULL;
-        size_t size = cmpct_test_random_next() & 0xff;
-        if (aligned) {
-            uintptr_t alignment = 1 << ((i / 2) % 13);
-            allocations[i] = cmpct_aligned_alloc_impl(heap, size, alignment);
-            ASSERT((((uintptr_t)allocations[i]) & (alignment - 1)) == 0);
-        } else {
-            allocations[i] = cmpct_malloc_impl(heap, size);
-            ASSERT(cmpct_get_allocated_size_impl(heap, allocations[i]) >= size);
-            // Waste is rather more on 64 bit because the doubly-linked freelist
-            // entries are so big.
-            if (sizeof(void *) == 4) {
-                ASSERT(cmpct_get_allocated_size_impl(heap, allocations[i]) <= size * 1.06 + sizeof(free_t));
-            }
->>>>>>> 465d8a534f... Aligned allocation semantics for esp-idf 4.3
         }
         for (size_t j = 0; j < size; j++) {
             allocations[i][j] = cmpct_test_random_next();
         }
     }
     for (int i = 0; i < TEST_ITERATIONS; i++) {
-<<<<<<< HEAD
         cmpct_free(heap, allocations[i]);
-=======
-        cmpct_free_impl(heap, allocations[i]);
->>>>>>> 465d8a534f... Aligned allocation semantics for esp-idf 4.3
     }
     ASSERT(remaining == cmpct_free_size_impl(heap));
     ASSERT(heap_size == heap->size);
@@ -1143,11 +1121,6 @@ IRAM_ATTR void *cmpct_malloc_impl(cmpct_heap_t *heap, size_t size)
     }
     lock(heap);
     void *tag = GET_THREAD_LOCAL_TAG;
-<<<<<<< HEAD
-    void *result = page_alloc(heap, PAGES_FOR_BYTES(size), tag);
-    unlock(heap);
-    return result;
-=======
     void *result = page_alloc(heap, PAGES_FOR_BYTES(size), PAGE_SIZE, tag);
     unlock(heap);
     return result;
@@ -1223,7 +1196,6 @@ IRAM_ATTR void *cmpct_aligned_alloc_impl(cmpct_heap_t *heap, size_t size, size_t
     // Create the allocation from the aligned area, possibly freeing the excess
     // on the right.
     return allocation_tail(heap, (free_t *)aligned_header, size, size_with_header, size_to_index_freeing(aligned_part_size - sizeof(header_t)));
->>>>>>> 465d8a534f... Aligned allocation semantics for esp-idf 4.3
 }
 
 IRAM_ATTR static bool is_page_allocated(cmpct_heap_t *heap, void *p)
