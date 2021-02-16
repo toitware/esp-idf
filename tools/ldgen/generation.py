@@ -64,7 +64,7 @@ class RuleNode():
         # the mappings must be inserted from least to most specific.
         # This sort is done in generate_rules().
         if sections:
-            for (s, v) in sections.items():
+            for (s, v) in sorted(sections.items()):
                 self.sections[s] = RuleNode.Section(v.target, [], [])
 
     def add_exclusion(self, sections, exclusion):
@@ -110,7 +110,7 @@ class RuleNode():
         commands = collections.defaultdict(list)
 
         def process_commands(cmds):
-            for (target, commands_list) in cmds.items():
+            for (target, commands_list) in sorted(cmds.items()):
                 commands[target].extend(commands_list)
 
         # Process the commands generated from this node
@@ -283,7 +283,7 @@ class Generation:
         scheme_dictionary = collections.defaultdict(dict)
 
         # Collect sections into buckets based on target name
-        for scheme in self.schemes.values():
+        for scheme in sorted(self.schemes.values()):
             sections_bucket = collections.defaultdict(list)
 
             for (sections_name, target_name) in scheme.entries:
@@ -302,8 +302,8 @@ class Generation:
             scheme_dictionary[scheme.name] = sections_bucket
 
         # Search for and raise exception on first instance of sections mapped to multiple targets
-        for (scheme_name, sections_bucket) in scheme_dictionary.items():
-            for sections_a, sections_b in itertools.combinations(sections_bucket.values(), 2):
+        for (scheme_name, sections_bucket) in sorted(scheme_dictionary.items()):
+            for sections_a, sections_b in itertools.combinations(sorted(sections_bucket.values()), 2):
                 set_a = set()
                 set_b = set()
 
@@ -331,7 +331,7 @@ class Generation:
     def _generate_entity_mappings(self, scheme_dictionary, entities):
         entity_mappings = []
 
-        for mapping in self.mappings.values():
+        for mapping in sorted(self.mappings.values()):
             archive = mapping.archive
 
             for (obj, symbol, scheme_name) in mapping.entries:
@@ -356,7 +356,7 @@ class Generation:
                 # obj (section1 -> target1)
                 # obj (section2 -> target2)
                 # ...
-                for (target, sections) in scheme_dictionary[scheme_name].items():
+                for (target, sections) in sorted(scheme_dictionary[scheme_name].items()):
                     for section in sections:
                         entity_mappings.append(Generation.EntityMapping(entity, self.get_section_strs(section), target))
 
@@ -372,7 +372,7 @@ class Generation:
         # Create root nodes dictionary for the default scheme, whose
         # key is the target name and value is a list of the root nodes for that target.
         root_node = RootNode()
-        for (target, sections) in scheme_dictionary['default'].items():
+        for (target, sections) in sorted(scheme_dictionary['default'].items()):
             for section in sections:
                 root_node.insert(Entity(), self.get_section_strs(section), target, entities)
 
