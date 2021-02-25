@@ -333,7 +333,6 @@ class GenerationModel:
 
         # Generate rules based on mapping fragments
         for mapping in sorted(self.mappings.values(), key=str):
-            print mapping.archive
             archive = mapping.archive
             mapping_rules = all_mapping_rules[archive]
             for (obj, symbol, scheme_name) in mapping.entries:
