@@ -216,6 +216,9 @@ class Fragment():
     def get_key_grammars(self):
         pass
 
+    def __lt__(self, other):
+        return self.entries < other.entries
+
 
 class Sections(Fragment):
     """
