@@ -456,7 +456,7 @@ class Generation:
                     # Check if all section->target defined in the current
                     # scheme.
                     for (s, t, f) in flags:
-                        if (t not in sorted(scheme_dictionary[scheme_name]).keys() or
+                        if (t not in scheme_dictionary[scheme_name].keys() or
                                 s not in [_s.name for _s in scheme_dictionary[scheme_name][t]]):
 
                             message = "%s->%s not defined in scheme '%s'" % (s, t, scheme_name)
