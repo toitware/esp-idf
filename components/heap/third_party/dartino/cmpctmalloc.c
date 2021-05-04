@@ -1370,7 +1370,10 @@ size_t cmpct_minimum_free_size_impl(cmpct_heap_t *heap)
 // Called with the lock.
 IRAM_ATTR static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, uintptr_t alignment, void *tag)
 {
-    if (pages == 0) return NULL;  // Size overflow.
+    // If pages == 0, then we assume that the caller ran into an integer
+    // overflow. This can happen if PAGES_FOR_BYTES was used on
+    // a really big size.
+    if (pages == 0) return NULL;
     for (int i = 0; i <= heap->number_of_pages - pages; i++) {
         uintptr_t start_address = (uintptr_t)(heap->page_base + i * PAGE_SIZE);
         if (heap->pages[i].status == PAGE_FREE && (start_address & (alignment - 1)) == 0) {
