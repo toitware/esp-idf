@@ -17,7 +17,10 @@
 
 #if defined(TEST_CMPCTMALLOC) || defined (CMPCTMALLOC_ON_LINUX)
 
-#include "../../include/esp_heap_caps.h"
+// Define these here for test purposes so we don't have to include
+// a lot of junk to run the cmpctmalloc tests.
+#define MALLOC_OPTION_DISABLE_FREE 0
+#define MALLOC_OPTION_THREAD_TAG 1
 
 #include <limits.h>
 #include <stdlib.h>
@@ -159,7 +162,7 @@ size_t cmpct_free_size_impl(cmpct_heap_t *heap);
 size_t cmpct_get_allocated_size_impl(cmpct_heap_t *heap, void *p);
 void cmpct_set_option(cmpct_heap_t *heap, int option, void *value);
 static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, uintptr_t alignment, void *tag);
-static void page_free(cmpct_heap_t *heap, void *address, int pages_dummy);
+static void page_free(cmpct_heap_t *heap, void *address, int pages_unused);
 struct header_struct;
 struct free_struct;
 static inline struct header_struct *right_header(struct header_struct *header);
@@ -184,7 +187,7 @@ static void *allocation_tail(cmpct_heap_t *heap, struct free_struct *head, size_
 // block allocator.
 #define HEAP_ALLOC_VIRTUAL_BITS 14
 // The biggest allocation on a page is limited by size of the biggest bucket.
-// With 8 buckets per order of magnitude the biggest bucket is bucker 7 (binary
+// With 8 buckets per order of magnitude the biggest bucket is bucket 7 (binary
 // 111) and so follows the pattern 1 111 0*.  Bucket sizes don't include the
 // header.
 #define SMALL_ALLOCATION_LIMIT ((0xf << (HEAP_ALLOC_VIRTUAL_BITS - 4)))
@@ -388,8 +391,8 @@ IRAM_ATTR static int size_to_index_allocating(size_t size, size_t *rounded_up_ou
 // Round down size to next bucket when freeing.
 IRAM_ATTR static int size_to_index_freeing(size_t size)
 {
-    size_t dummy;
-    return size_to_index_helper(size, &dummy, 0, 0);
+    size_t unused;
+    return size_to_index_helper(size, &unused, 0, 0);
 }
 
 IRAM_ATTR inline static size_t tag_as_free(size_t left_size)
@@ -553,6 +556,8 @@ IRAM_ATTR static void *create_allocation_header(
 
 #ifdef TEST_CMPCTMALLOC
 
+IRAM_ATTR void *cmpct_aligned_alloc_impl(cmpct_heap_t *heap, size_t size, size_t alignment);
+
 void cmpct_test_buckets(void)
 {
     size_t rounded;
@@ -646,6 +651,16 @@ static uint64_t cmpct_test_random_next()
     s1 ^= s1 << 23;
     test_random_state[1] = s1 ^ s0 ^ (s1 >> 18) ^ (s0 >> 5);
     return result;
+}
+
+static void cmpct_test_huge_allocations(cmpct_heap_t *heap)
+{
+    for (unsigned i = 1; i < PAGE_SIZE * 2; i++) {
+        void* p = cmpct_malloc_impl(heap, (size_t)0 - i);
+        ASSERT(!p);   // Badmalloc overflow.
+        p = cmpct_malloc_impl(heap, (unsigned)0 - i);
+        ASSERT(!p);   // Badmalloc overflow.
+    }
 }
 
 static void cmpct_test_get_back_newly_freed(cmpct_heap_t *heap)
@@ -1168,8 +1183,8 @@ IRAM_ATTR void *cmpct_aligned_alloc_impl(cmpct_heap_t *heap, size_t size, size_t
     // sizeof(header_t), then a free list entry, sizeof(free_t).
     size_t aligned_size = size + alignment - NATURAL_ALIGNMENT + sizeof(header_t) + sizeof(free_t);
 
-    size_t dummy;
-    int start_bucket = size_to_index_allocating(aligned_size, &dummy);
+    size_t unused;
+    int start_bucket = size_to_index_allocating(aligned_size, &unused);
 
     lock(heap);
 
@@ -1355,6 +1370,10 @@ size_t cmpct_minimum_free_size_impl(cmpct_heap_t *heap)
 // Called with the lock.
 IRAM_ATTR static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, uintptr_t alignment, void *tag)
 {
+    // If pages == 0, then we assume that the caller ran into an integer
+    // overflow. This can happen if PAGES_FOR_BYTES was used on
+    // a really big size.
+    if (pages == 0) return NULL;
     for (int i = 0; i <= heap->number_of_pages - pages; i++) {
         uintptr_t start_address = (uintptr_t)(heap->page_base + i * PAGE_SIZE);
         if (heap->pages[i].status == PAGE_FREE && (start_address & (alignment - 1)) == 0) {
@@ -1428,7 +1447,7 @@ IRAM_ATTR static void page_iterate(cmpct_heap_t *heap, void *user_data, void *ta
 // does not contain support for trimming a region obtained from the page
 // allocator, so the number of pages is always the number of pages allocated,
 // and we ignore the page count argument.  Called with the lock.
-IRAM_ATTR static void page_free(cmpct_heap_t *heap, void *address, int page_count_dummy)
+IRAM_ATTR static void page_free(cmpct_heap_t *heap, void *address, int page_count_unused)
 {
     size_t page = page_number(heap, address);
     if (page >= heap->number_of_pages || heap->pages[page].status != PAGE_IN_USE) {
@@ -1535,6 +1554,7 @@ int main(int argc, char *argv[])
     void *arena = malloc(TEST_HEAP_SIZE);
     cmpct_heap_t *heap = cmpct_register_impl(arena, TEST_HEAP_SIZE);
     cmpct_test_get_back_newly_freed(heap);
+    cmpct_test_huge_allocations(heap);
     pthread_key_create(&tls_key, NULL);
     cmpct_test_tagged_allocations(heap);
     for (int i = 0; i < 1000; i++) {
@@ -1550,19 +1570,19 @@ int main(int argc, char *argv[])
             free(arena);
             continue;
         }
-        for (int allocation = SMALL_ALLOCATION_LIMIT; allocation >= 1; allocation--) {
-            void *p = cmpct_alloc(heap, allocation);
+        for (int allocation = SMALL_ALLOCATION_LIMIT * 2; allocation >= 1; allocation--) {
+            void *p = cmpct_malloc_impl(heap, allocation);
             if (p) {
-                if (first_success == -1) {
+                if (first_success == -1 && allocation != ROUND_DOWN(allocation, PAGE_SIZE)) {
                     first_success = allocation;
                 }
                 memset(p, 0x77, allocation);
             } else {
                 if (first_success != -1) {
-                    printf("At size %d, allocation failed at size %d\n", size, allocation);
+                    printf("At size %d, allocation failed at size %d, but had succeeded at size %d\n", size, allocation, first_success);
                 }
             }
-            cmpct_free(heap, p);
+            cmpct_free_impl(heap, p);
         }
         // If the area we gave to the allocator was big enough then we would
         // expect an allocation to succeed, but the memory area can be split
