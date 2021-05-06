@@ -103,7 +103,9 @@ esp_partition_iterator_t esp_partition_find(esp_partition_type_t type,
 
 esp_partition_iterator_t esp_partition_next(esp_partition_iterator_t it)
 {
-    assert(it);
+    if (it == NULL) {
+        return NULL;
+    }
     // iterator reached the end of linked list?
     if (it->next_item == NULL) {
         esp_partition_iterator_release(it);
@@ -151,6 +153,9 @@ static esp_partition_iterator_opaque_t* iterator_create(esp_partition_type_t typ
 {
     esp_partition_iterator_opaque_t* it =
             (esp_partition_iterator_opaque_t*) malloc(sizeof(esp_partition_iterator_opaque_t));
+    if (it == NULL) {
+        return NULL;
+    }
     it->type = type;
     it->subtype = subtype;
     it->label = label;
