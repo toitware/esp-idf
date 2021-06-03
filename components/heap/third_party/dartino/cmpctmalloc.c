@@ -214,37 +214,49 @@ typedef struct header_struct {
     void *tag;  // Used for the pointer set by the user with heap_caps_set_option.
 } header_t;
 
+// Prevents some optimizations by doing a null operation on a register variable
+// that the compiler cannot see.  This is used to prevent the compiler
+// converting 32 bit load instructions into 16 bit load instructions that do
+// not work on IRAM on the ESP32.
+#define OBFUSCATE(variable)    \
+  __asm__ (""                  \
+          :"=r"(variable)      \
+          :"0"(variable)       \
+          :                    \
+  )                            \
+
 static INLINE size_t get_left_size(header_t *header)
 {
-    // The mask here should be 0xffff, but that would cause gcc to emit a 16 bit
-    // load. We know the lowest bit of the size (top 16 bits) is always 0 so we
-    // just include it here.
-    return header->size_ & 0x1ffff;
+    size_t field = header->size_;
+    OBFUSCATE(field);
+    return field & 0xffff;
 }
 
 static INLINE void set_left_size(header_t *header, size_t size)
 {
-    ASSERT(size <= 0xffff);
-    header->size_ = (header->size_ & ~0xffff) | size;
+    size_t field = header->size_ & ~0xffff;
+    OBFUSCATE(field);
+    size_t result = field | size;
+    OBFUSCATE(result);
+    header->size_ = result;
 }
 
 static INLINE size_t get_size(header_t *header)
 {
     size_t field = header->size_;
-    // We should just shift down by 16, but that would cause gcc to emit a 16 bit
-    // load. We know the highest bit of the left_size (bottom 16 bits) is always 0
-    // so we extract that and add it in for no effect.  The expression (field >>
-    // 15) & 1 can be obtained with a single extui instruction.  The more obvious
-    // (field & 0x8000) would require a load of the 0x8000 constant from the
-    // constant pool.
-    return (field >> 16) + ((field >> 15) & 1);
+    OBFUSCATE(field);
+    return field >> 16;
 }
 
 static INLINE void set_size(header_t *header, size_t size)
 {
     ASSERT(size <= 0xffff);
     ASSERT((size & 1) == 0);
-    header->size_ = (header->size_ & 0xffff) | (size << 16);
+    size_t field = header->size_;
+    OBFUSCATE(field);
+    size_t result = (field & 0xffff) | (size << 16);
+    OBFUSCATE(result);
+    header->size_ = result;
 }
 
 typedef struct free_struct {
@@ -417,9 +429,7 @@ IRAM_ATTR inline static header_t *right_header(header_t *header)
 
 IRAM_ATTR inline static header_t *left_header(header_t *header)
 {
-    // We only need to clear the low bit, but we clear the lowest two, because
-    // otherwise gcc issues 16 bit operations that fail in IRAM.
-    return (header_t *)((char *)header - (get_left_size(header) & ~3));
+    return (header_t *)((char *)header - (get_left_size(header) & ~1));
 }
 
 IRAM_ATTR inline static void set_free_list_bit(cmpct_heap_t *heap, int index)
