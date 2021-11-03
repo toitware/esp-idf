@@ -1580,7 +1580,7 @@ esp_err_t uart_driver_install(uart_port_t uart_num, int rx_buffer_size, int tx_b
         p_uart_obj[uart_num] = uart_alloc_driver_obj(event_queue_size, tx_buffer_size, rx_buffer_size);
         if (p_uart_obj[uart_num] == NULL) {
             ESP_LOGE(UART_TAG, "UART driver malloc error");
-            return ESP_FAIL;
+            return ESP_ERR_NO_MEM;
         }
         p_uart_obj[uart_num]->uart_num = uart_num;
         p_uart_obj[uart_num]->uart_mode = UART_MODE_UART;
