@@ -1,7 +1,6 @@
 set(srcs
     "heap_caps.c"
-    "heap_caps_init.c"
-    "heap_trace.c")
+    "heap_caps_init.c")
 
 if(CONFIG_CMPCT_MALLOC_HEAP)
     list(APPEND srcs "third_party/dartino/cmpctmalloc.c")
@@ -10,7 +9,7 @@ endif()
 if(NOT CONFIG_CMPCT_MALLOC_HEAP)
     list(APPEND srcs "multi_heap.c")
     list(APPEND srcs "heap_tlsf.c")
-+endif()
+endif()
 
 if(NOT CONFIG_HEAP_POISONING_DISABLED)
     list(APPEND srcs "multi_heap_poisoning.c")
