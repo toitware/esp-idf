@@ -546,7 +546,9 @@ void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, tagged_me
 {
     heap_t *heap;
     SLIST_FOREACH(heap, &registered_heaps, next) {
-        multi_heap_iterate_tagged_memory_areas(heap->heap, user_data, tag, callback, flags);
+        if (heap->heap) {
+            multi_heap_iterate_tagged_memory_areas(heap->heap, user_data, tag, callback, flags);
+        }
     }
 }
 
