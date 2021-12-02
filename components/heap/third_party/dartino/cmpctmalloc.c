@@ -1263,7 +1263,6 @@ IRAM_ATTR static size_t page_number(cmpct_heap_t *heap, void *p)
 {
     size_t offset = (char *)p - heap->page_base;
     size_t page = offset >> PAGE_SIZE_SHIFT;
-    ASSERT(heap->pages[page].status == PAGE_IN_USE);
     return page;
 }
 
@@ -1332,6 +1331,7 @@ void cmpct_get_info_impl(cmpct_heap_t *heap, multi_heap_info_t *info)
                     }
                 }
             } else {
+                ASSERT(current_status == PAGE_CONTINUED);
                 if (current_tag != heap) {  // Pages used for the sub-page allocator are self-tagged.
                     info->total_allocated_bytes += current_page_run;
                     if (current_page_run != 0) info->allocated_blocks++;
@@ -1340,6 +1340,11 @@ void cmpct_get_info_impl(cmpct_heap_t *heap, multi_heap_info_t *info)
             if (heap->pages[i].status == PAGE_FREE) {
                 current_status = PAGE_FREE;
             } else {
+                // When we move from one allocation to the next the first page
+                // in the new allocation is in use or free (never continued).
+                ASSERT(heap->pages[i].status == PAGE_IN_USE);
+                // Subsequent pages in the same allocation will be marked as
+                // continued, so set us up to expect that.
                 current_status = PAGE_CONTINUED;
                 current_tag = heap->pages[i].tag;
             }
