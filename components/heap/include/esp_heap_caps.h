@@ -70,7 +70,7 @@ esp_err_t heap_caps_register_failed_alloc_callback(esp_alloc_failed_hook_t callb
 #define MALLOC_ITERATE_TAG_HEAP_OVERHEAD (-2)  /// Memory is used by malloc for internal accounting etc.
 
 /**
- * Options for heap_caps_set_option
+ * Options for heap_caps_set_option and heap_caps_get_option.
  */
 #define MALLOC_OPTION_DISABLE_FREE 0 /// Value is false (null) or true (non-null).  Calls to free are ignored.
 #define MALLOC_OPTION_THREAD_TAG   1 /// The tag value to be attached to future allocations in this thread.
@@ -440,6 +440,14 @@ void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, tagged_me
  * @param value   A value that depends on the option being set.
  */
 void heap_caps_set_option(int option, void *value);
+
+/**
+ * @brief Get global flags and options for the malloc heap.
+ *
+ * @param option  Select the option to get.  See MALLOC_OPTION_DISABLE_FREE etc.
+ * @param value   A value that depends on the option being set.
+ */
+void *heap_caps_get_option(int option);
 
 #ifdef __cplusplus
 }

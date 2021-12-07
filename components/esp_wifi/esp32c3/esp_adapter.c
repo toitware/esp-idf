@@ -60,17 +60,29 @@ extern void wifi_apb80m_release(void);
 
 IRAM_ATTR void *wifi_malloc( size_t size )
 {
-    return malloc(size);
+    void *old = heap_caps_get_option(MALLOC_OPTION_THREAD_TAG);
+    heap_caps_set_option(MALLOC_OPTION_THREAD_TAG, (void *)'W');
+    void *ptr = malloc(size);
+    heap_caps_set_option(MALLOC_OPTION_THREAD_TAG, old);
+    return ptr;
 }
 
 IRAM_ATTR void *wifi_realloc( void *ptr, size_t size )
 {
-    return realloc(ptr, size);
+    void *old = heap_caps_get_option(MALLOC_OPTION_THREAD_TAG);
+    heap_caps_set_option(MALLOC_OPTION_THREAD_TAG, (void *)'W');
+    void *result = realloc(ptr, size);
+    heap_caps_set_option(MALLOC_OPTION_THREAD_TAG, old);
+    return result;
 }
 
 IRAM_ATTR void *wifi_calloc( size_t n, size_t size )
 {
-    return calloc(n, size);
+    void *old = heap_caps_get_option(MALLOC_OPTION_THREAD_TAG);
+    heap_caps_set_option(MALLOC_OPTION_THREAD_TAG, (void *)'W');
+    void *ptr = calloc(n, size);
+    heap_caps_set_option(MALLOC_OPTION_THREAD_TAG, old);
+    return ptr;
 }
 
 static void * IRAM_ATTR wifi_zalloc_wrapper(size_t size)
@@ -81,6 +93,8 @@ static void * IRAM_ATTR wifi_zalloc_wrapper(size_t size)
 
 wifi_static_queue_t* wifi_create_queue( int queue_len, int item_size)
 {
+    void *old = heap_caps_get_option(MALLOC_OPTION_THREAD_TAG);
+    heap_caps_set_option(MALLOC_OPTION_THREAD_TAG, (void *)'W');
     wifi_static_queue_t *queue = NULL;
 
     queue = (wifi_static_queue_t*)heap_caps_malloc(sizeof(wifi_static_queue_t), MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
@@ -148,8 +162,11 @@ static void disable_intr_wrapper(uint32_t intr_mask)
 
 static void * spin_lock_create_wrapper(void)
 {
+    void *old = heap_caps_get_option(MALLOC_OPTION_THREAD_TAG);
+    heap_caps_set_option(MALLOC_OPTION_THREAD_TAG, (void *)'W');
     portMUX_TYPE tmp = portMUX_INITIALIZER_UNLOCKED;
     void *mux = malloc(sizeof(portMUX_TYPE));
+    heap_caps_set_option(MALLOC_OPTION_THREAD_TAG, old);
 
     if (mux) {
         memcpy(mux,&tmp,sizeof(portMUX_TYPE));
@@ -445,22 +462,37 @@ static uint32_t esp_clk_slowclk_cal_get_wrapper(void)
 
 static void * IRAM_ATTR malloc_internal_wrapper(size_t size)
 {
-    return heap_caps_malloc(size, MALLOC_CAP_8BIT|MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    void *old = heap_caps_get_option(MALLOC_OPTION_THREAD_TAG);
+    heap_caps_set_option(MALLOC_OPTION_THREAD_TAG, (void *)'W');
+    void *ptr = heap_caps_malloc(size, MALLOC_CAP_8BIT|MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    heap_caps_set_option(MALLOC_OPTION_THREAD_TAG, old);
+    return ptr;
 }
 
 static void * IRAM_ATTR realloc_internal_wrapper(void *ptr, size_t size)
 {
-    return heap_caps_realloc(ptr, size, MALLOC_CAP_8BIT|MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    void *old = heap_caps_get_option(MALLOC_OPTION_THREAD_TAG);
+    heap_caps_set_option(MALLOC_OPTION_THREAD_TAG, (void *)'W');
+    void *result = heap_caps_realloc(ptr, size, MALLOC_CAP_8BIT|MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    heap_caps_set_option(MALLOC_OPTION_THREAD_TAG, old);
+    return result;
 }
 
 static void * IRAM_ATTR calloc_internal_wrapper(size_t n, size_t size)
 {
-    return heap_caps_calloc(n, size, MALLOC_CAP_8BIT|MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    void *old = heap_caps_get_option(MALLOC_OPTION_THREAD_TAG);
+    heap_caps_set_option(MALLOC_OPTION_THREAD_TAG, (void *)'W');
+    void *ptr = heap_caps_calloc(n, size, MALLOC_CAP_8BIT|MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    heap_caps_set_option(MALLOC_OPTION_THREAD_TAG, old);
+    return ptr;
 }
 
 static void * IRAM_ATTR zalloc_internal_wrapper(size_t size)
 {
+    void *old = heap_caps_get_option(MALLOC_OPTION_THREAD_TAG);
+    heap_caps_set_option(MALLOC_OPTION_THREAD_TAG, (void *)'W');
     void *ptr = heap_caps_calloc(1, size, MALLOC_CAP_8BIT|MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL);
+    heap_caps_set_option(MALLOC_OPTION_THREAD_TAG, old);
     return ptr;
 }
 

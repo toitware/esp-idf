@@ -463,6 +463,15 @@ void heap_caps_set_option(int option, void *value)
     }
 }
 
+void *heap_caps_get_option( int option )
+{
+    if (option == MALLOC_OPTION_THREAD_TAG) {
+        return multi_heap_get_option(option);
+    } else {
+        return NULL;
+    }
+}
+
 size_t heap_caps_get_largest_free_block( uint32_t caps )
 {
     multi_heap_info_t info;

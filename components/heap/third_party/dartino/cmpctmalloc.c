@@ -97,6 +97,9 @@ void multi_heap_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data,
 void multi_heap_set_option(cmpct_heap_t *heap, int option, void *value)
     __attribute__((alias("cmpct_set_option")));
 
+void *multi_heap_get_option(int option)
+    __attribute__((alias("cmpct_get_option")));
+
 typedef uintptr_t addr_t;
 typedef uintptr_t vaddr_t;
 
@@ -161,6 +164,7 @@ void cmpct_free(cmpct_heap_t *heap, void *payload);
 size_t cmpct_free_size_impl(cmpct_heap_t *heap);
 size_t cmpct_get_allocated_size_impl(cmpct_heap_t *heap, void *p);
 void cmpct_set_option(cmpct_heap_t *heap, int option, void *value);
+void *cmpct_get_option(int option);
 static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, uintptr_t alignment, void *tag);
 static void page_free(cmpct_heap_t *heap, void *address, int pages_unused);
 struct header_struct;
@@ -1492,6 +1496,16 @@ void cmpct_set_option(cmpct_heap_t *heap, int option, void *value)
     } else if (option == MALLOC_OPTION_DISABLE_FREE) {
         heap->ignore_free = value;
     }
+}
+
+void *cmpct_get_option(int option)
+{
+    if (option != MALLOC_OPTION_THREAD_TAG) return NULL;
+#if !defined(TEST_CMPCTMALLOC) && !defined(CMPCTMALLOC_ON_LINUX)
+    return pvTaskGetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX);
+#else
+    return pthread_getspecific(tls_key);
+#endif
 }
 
 void cmpct_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void *tag, tagged_memory_callback_t callback, int flags)
