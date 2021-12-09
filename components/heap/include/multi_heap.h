@@ -196,6 +196,7 @@ void multi_heap_get_info(multi_heap_handle_t heap, multi_heap_info_t *info);
 #define MULTI_HEAP_THREAD_TAG_INDEX 1
 
 void multi_heap_set_option(multi_heap_handle_t heap, int option, void *value);
+void *multi_heap_get_option(int option);
 void multi_heap_iterate_tagged_memory_areas(multi_heap_handle_t heap, void *user_data, void *tag, tagged_memory_callback_t callback, int flags);
 
 #ifdef __cplusplus
