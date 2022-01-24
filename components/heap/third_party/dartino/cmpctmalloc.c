@@ -30,7 +30,7 @@
 #define LTRACEF(...)
 #define LTRACE_ENTRY
 #define DEBUG_ASSERT assert
-#define ASSERT(x) if (!(x)) abort()
+#define ASSERT(x) do { if (!(x)) { fprintf(stderr, "Failed assert at %s:%d\n", __FILE__, __LINE__); abort(); } } while(0)
 #define USE(x) ((void)(x))
 #define STATIC_ASSERT(condition)
 #define dprintf(...) fprintf(__VA_ARGS__)
@@ -507,7 +507,9 @@ IRAM_ATTR static void free_to_page_allocator(cmpct_heap_t *heap, header_t *heade
 
     DEBUG_ASSERT(IS_PAGE_ALIGNED(size));
     page_free(heap, arena, size >> PAGE_SIZE_SHIFT);
-    heap->size -= size;
+    // Adjust the heap->size.  Free pages are counted fully, but arenas
+    // allocated on pages have the arena pointer and sentinels subtracted.
+    heap->size += sizeof(arena_t) + 2 * sizeof(header_t);
 }
 
 IRAM_ATTR static void fix_left_size(header_t *right, header_t *new_left)
@@ -553,7 +555,7 @@ IRAM_ATTR static void free_memory(cmpct_heap_t *heap, header_t *header, size_t l
         IS_PAGE_ALIGNED((uintptr_t)right + sizeof(header_t)) &&
         is_start_of_page_allocation(left) &&
         is_end_of_page_allocation(right)) {
-        // The entire page was free and can be returned to the page allocator.
+        // A whole number of pages were free and can be returned to the page allocator.
         unlink_free_unknown_bucket(heap, (free_t *)header);
         free_to_page_allocator(heap, left, size + get_size(left) + sizeof(header_t));
     }
@@ -1017,9 +1019,9 @@ IRAM_ATTR void *cmpct_realloc(cmpct_heap_t *heap, void *payload, size_t size)
 // together and a sentinel at either end that is the size of one header.
 static const size_t arena_overhead = 2 * sizeof(header_t) + sizeof(arena_t);
 
+// Adds an arena for small allocations to the heap.
 IRAM_ATTR static void add_to_heap(cmpct_heap_t *heap, void *new_area, size_t size, free_t **bucket)
 {
-    heap->size += size;
     void *top = (char *)new_area + size;
     arena_t *new_arena = (arena_t *)new_area;
     // Link into doubly linked list.
@@ -1034,6 +1036,7 @@ IRAM_ATTR static void add_to_heap(cmpct_heap_t *heap, void *new_area, size_t siz
     create_allocation_header(left_sentinel, sizeof(header_t), 0, NULL);
     header_t *new_header = left_sentinel + 1;
     size_t free_size = size - arena_overhead;
+    heap->size += free_size;
     create_free_area(heap, new_header, sizeof(header_t), free_size, bucket);
     header_t *right_sentinel = (header_t *)(top - sizeof(header_t));
     // Not free, stops attempts to coalesce right.
@@ -1044,11 +1047,15 @@ IRAM_ATTR static void add_to_heap(cmpct_heap_t *heap, void *new_area, size_t siz
 // Called with the lock, apart from during init.
 IRAM_ATTR static ssize_t heap_grow(cmpct_heap_t *heap, free_t **bucket, int pages)
 {
-    // Allocate one page more.  The allocation tag is a pointer to the heap
+    // Allocate more pages.  The allocation tag is a pointer to the heap
     // itself so that it won't match any allocation tag used by the program.
     void *ptr = page_alloc(heap, pages, PAGE_SIZE, heap);
     if (ptr == NULL) return -1;
     LTRACEF("growing heap by 0x%x bytes, new ptr %p\n", pages << PAGE_SIZE_SHIFT, ptr);
+    // Add_to_heap will increase size.  That's often OK when we are adding
+    // non-page-sized areas to the heap, but that's not appropriate here
+    // because the pages were already part of the heap.
+    heap->size -= pages * PAGE_SIZE;
     add_to_heap(heap, ptr, pages * PAGE_SIZE, bucket);
     return pages * PAGE_SIZE;
 }
@@ -1067,9 +1074,9 @@ void cmpct_init(cmpct_heap_t *heap)
 
     heap->lock = NULL;
     heap->ignore_free = NULL;
-    heap->remaining = 0;
-    heap->size = 0;
-    heap->free_blocks = 0;
+    heap->size = heap->number_of_pages * PAGE_SIZE;
+    heap->remaining = heap->size;
+    heap->free_blocks = 1;  // All the free pages make up one free block.
     heap->allocated_blocks = 0;
     // Empty doubly linked list points to itself.
     heap->arenas.previous = &heap->arenas;
@@ -1086,7 +1093,8 @@ void cmpct_init(cmpct_heap_t *heap)
 cmpct_heap_t *cmpct_register_impl(void *start, size_t size)
 {
     if (size < sizeof(cmpct_heap_t)) return NULL;  // Area too small.
-    // We can't have more pages than the rounded down size.
+    // We can't have more pages than the rounded down size so
+    // this does an optimistic calculation of the number pages.
     intptr_t pages = size >> PAGE_SIZE_SHIFT;
     ASSERT(pages >= 0);
 
@@ -1309,9 +1317,11 @@ void cmpct_get_info_impl(cmpct_heap_t *heap, multi_heap_info_t *info)
     lock(heap);
 
     info->total_free_bytes = heap->remaining;
-    // Subtract the two end sentinels and the free list header that are always
-    // the minimum that is taken by the heap.
-    info->total_allocated_bytes = (heap->size - heap->remaining) - 3 * sizeof(header_t);
+    // total_allocated_bytes includes the headers on each allocation, but
+    // doesn't include the static structures that are always there once
+    // the heap has been set up.  This means it doesn't include the arena
+    // structures and the sentinels at each end of each arena.
+    info->total_allocated_bytes = heap->size - heap->remaining;
     info->largest_free_block = 0;
     // TODO: We don't currently keep track of the all-time low number of free
     // bytes.
@@ -1414,6 +1424,15 @@ IRAM_ATTR static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, uintptr_t 
                 for (int i = 0; i < pages << PAGE_SIZE_SHIFT; i += sizeof(int)) {
                     ((int *)(result))[i >> 2] = 0;
                 }
+                if (heap->pages[i + pages].status != PAGE_FREE) {
+                  // We used up a whole contiguous sequence of free pages so
+                  // this reduced the number of free blocks.
+                  heap->free_blocks--;
+                }
+                // If the pages are being allocated for an arena for small
+                // allocations then most of this reduction in heap->remaining
+                // will be re-added in create_free_area.
+                heap->remaining -= pages * PAGE_SIZE;
                 return heap->page_base + i * PAGE_SIZE;
             }
         }
@@ -1469,11 +1488,21 @@ IRAM_ATTR static void page_iterate(cmpct_heap_t *heap, void *user_data, void *ta
 IRAM_ATTR static void page_free(cmpct_heap_t *heap, void *address, int page_count_unused)
 {
     size_t page = page_number(heap, address);
+    bool previous_is_free = page != 0 && heap->pages[page - 1].status == PAGE_FREE;
     if (page >= heap->number_of_pages || heap->pages[page].status != PAGE_IN_USE) {
         FATAL("Invalid free");
     }
+    int pages_freed = 1;
     for (intptr_t j = page + 1; heap->pages[j].status == PAGE_CONTINUED; j++) {
         heap->pages[j].status = PAGE_FREE;
+        pages_freed = j + 1 - page;
+    }
+    heap->remaining += pages_freed * PAGE_SIZE;
+    bool next_is_free = heap->pages[page + pages_freed].status == PAGE_FREE;
+    if (!previous_is_free && !next_is_free) {
+      heap->free_blocks++;
+    } else if (previous_is_free && next_is_free) {
+      heap->free_blocks--;
     }
     heap->pages[page].status = PAGE_FREE;
 }
@@ -1577,11 +1606,31 @@ gcc -m32 -ffreestanding -fsanitize=address -DTEST_CMPCTMALLOC -DDEBUG=1 -g -o te
 gcc      -ffreestanding -fsanitize=address -DTEST_CMPCTMALLOC -DDEBUG=1 -g -o test third_party/esp-idf/components/heap/third_party/dartino/cmpctmalloc.c -pthread && ./test
  */
 
+void assert_heap_is_empty(cmpct_heap_t* heap)
+{
+    multi_heap_info_t info;
+    cmpct_get_info_impl(heap, &info);
+    ASSERT(info.total_allocated_bytes == 0);
+    ASSERT(info.allocated_blocks == 0);
+}
+
 int main(int argc, char *argv[])
 {
     int TEST_HEAP_SIZE = 1500000;
     void *arena = malloc(TEST_HEAP_SIZE);
     cmpct_heap_t *heap = cmpct_register_impl(arena, TEST_HEAP_SIZE);
+    bool start_aligned = (size_t)arena == ROUND_DOWN((size_t)arena, PAGE_SIZE);
+    // One free area for all the aligned pages and one each for the ends
+    // that were used for arena allocation.
+    int heap_free_blocks = heap->free_blocks;
+    ASSERT(heap_free_blocks == start_aligned ? 2 : 3);
+    ssize_t heap_size = heap->size;
+    ssize_t heap_remaining = heap->remaining;
+    ASSERT(heap_size >= TEST_HEAP_SIZE * 0.98);
+    ASSERT(heap_size <= TEST_HEAP_SIZE);
+    ASSERT(heap_remaining >= heap->size * 0.98);
+    ASSERT(heap_remaining <= heap->size);
+    assert_heap_is_empty(heap);
     cmpct_test_get_back_newly_freed(heap);
     cmpct_test_huge_allocations(heap);
     pthread_key_create(&tls_key, NULL);
@@ -1589,29 +1638,46 @@ int main(int argc, char *argv[])
     for (int i = 0; i < 1000; i++) {
         cmpct_test_churn(heap);
     }
+    ASSERT(heap->free_blocks == heap_free_blocks);
+    ASSERT(heap->size == heap_size);
+    ASSERT(heap->remaining == heap_remaining);
+    assert_heap_is_empty(heap);
 
     for (int size = 0; size < 12000; size++) {
         int first_success = -1;
         arena = malloc(size);
-        heap = cmpct_register_impl(arena, size);
-        if (heap == NULL) {
+        cmpct_heap_t* small_heap = cmpct_register_impl(arena, size);
+        if (small_heap == NULL) {
             ASSERT(size < sizeof(cmpct_heap_t));
             free(arena);
             continue;
         }
+        assert_heap_is_empty(small_heap);
+        int free_blocks = small_heap->free_blocks;
+        ASSERT(1 <= free_blocks && free_blocks <= 3);
+        ssize_t small_heap_size = small_heap->size;
+        ssize_t small_heap_remaining = small_heap->remaining;
+        ASSERT(small_heap_size >= size - 125 * (int)sizeof(size_t));
+        ASSERT(small_heap_size <= size);
+        ASSERT(small_heap_remaining >= small_heap_size - 20 * (int)sizeof(size_t));
+        ASSERT(small_heap_remaining <= small_heap_size);
         for (int allocation = SMALL_ALLOCATION_LIMIT * 2; allocation >= 1; allocation--) {
-            void *p = cmpct_malloc_impl(heap, allocation);
+            void *p = cmpct_malloc_impl(small_heap, allocation);
             if (p) {
                 if (first_success == -1 && allocation != ROUND_DOWN(allocation, PAGE_SIZE)) {
                     first_success = allocation;
                 }
+                // May not match exactly because arena overhead is not part of
+                // the heap size and arenas can come and go.
+                ASSERT(small_heap->size <= small_heap_size);
+                ASSERT(small_heap->remaining < small_heap_remaining);
                 memset(p, 0x77, allocation);
             } else {
                 if (first_success != -1) {
                     printf("At size %d, allocation failed at size %d, but had succeeded at size %d\n", size, allocation, first_success);
                 }
             }
-            cmpct_free_impl(heap, p);
+            cmpct_free_impl(small_heap, p);
         }
         // If the area we gave to the allocator was big enough then we would
         // expect an allocation to succeed, but the memory area can be split
@@ -1619,6 +1685,13 @@ int main(int argc, char *argv[])
         // sure of any allocations.
         uintptr_t minimum_arena = arena_overhead + 4 * sizeof(header_t);
         ASSERT(ROUND_DOWN(size, (int)sizeof(header_t)) <= sizeof(cmpct_heap_t) + minimum_arena * 2 || first_success != -1);
+        ASSERT(free_blocks == small_heap->free_blocks);
+        // At this point all arenas should be empty, which means they are
+        // destroyed and their overhead becomes part of the heap size again, so
+        // it should match the initial size.
+        ASSERT(small_heap_size == small_heap->size);
+        ASSERT(small_heap_remaining == small_heap->remaining);
+        assert_heap_is_empty(small_heap);
         free(arena);
     }
 }
