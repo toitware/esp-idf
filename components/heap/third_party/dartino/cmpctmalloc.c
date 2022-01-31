@@ -55,7 +55,6 @@ typedef struct multi_heap_info cmpct_heap_t;
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "xtensa/core-macros.h"
 
 #include "../../multi_heap_platform.h"
 
@@ -132,6 +131,11 @@ static int first_allocations = true;
 
 // First allocation is too early in the boot process to get a thread local data, so we skip that.
 #define GET_THREAD_LOCAL_TAG ((in_interrupt_service_routine() || first_allocations) ? NULL : pvTaskGetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX))
+#elif defined(ESP_PLATFORM)
+// TODO: Find out whether non-xtensa ESP-IDF platforms call malloc from within
+// interrupts.  This has been deprecated for years, but may still be in the
+// code base.  For now, don't tag allocations.
+#define GET_THREAD_LOCAL_TAG null
 #else
 #define GET_THREAD_LOCAL_TAG (pvTaskGetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX))
 #endif
