@@ -676,11 +676,126 @@ static uint64_t cmpct_test_random_next()
 static void cmpct_test_huge_allocations(cmpct_heap_t *heap)
 {
     for (unsigned i = 1; i < PAGE_SIZE * 2; i++) {
-        void* p = cmpct_malloc_impl(heap, (size_t)0 - i);
+        void *p = cmpct_malloc_impl(heap, (size_t)0 - i);
         ASSERT(!p);   // Badmalloc overflow.
         p = cmpct_malloc_impl(heap, (unsigned)0 - i);
         ASSERT(!p);   // Badmalloc overflow.
     }
+}
+
+static void cmpct_test_realloc(cmpct_heap_t *heap)
+{
+    size_t pre_churn_remaining = heap->remaining;
+    size_t pre_churn_free_blocks = heap->free_blocks;
+
+    for (unsigned i = 1; i < PAGE_SIZE * 4; i++) {
+        uint8_t *p = cmpct_malloc_impl(heap, i);
+        ASSERT(p);
+        for (int j = 0; j < i; j++) {
+            p[j] = j + (j >> 8);
+        }
+        uint8_t *p2 = cmpct_realloc_impl(heap, p, i + 8);
+        for (int j = 0; j < i; j++) {
+            ASSERT(p2[j] == ((j + (j >> 8)) & 0xff));
+        }
+        cmpct_free_impl(heap, p2);
+    }
+    size_t post_churn_remaining = heap->remaining;
+    size_t post_churn_free_blocks = heap->free_blocks;
+
+    ASSERT(pre_churn_remaining == post_churn_remaining);
+    ASSERT(pre_churn_free_blocks == post_churn_free_blocks);
+
+    /* For a 1.5 Mbyte heap we need to fill it up a lot before it
+       falls back to overlapping reallocations.  This allocation is
+       adjusted until there are exactly 8 pages left at the end of
+       the page pool.  */
+    uint8_t *most_of_the_heap = cmpct_malloc_impl(heap, 1500000 - PAGE_SIZE * (sizeof(void*) == 8 ? 12 : 11));
+    ASSERT(most_of_the_heap);
+
+    size_t post_most_remaining = heap->remaining;
+    size_t post_most_free_blocks = heap->free_blocks;
+
+    /* The heap is so full we will exercise the in-place page realloc.  */
+
+    /* Test overlapping realloc when there is space after the
+       current allocation.  */
+    uint8_t *p = cmpct_malloc_impl(heap, PAGE_SIZE * 6);
+    ASSERT(p);
+    ASSERT(post_most_remaining - 6 * PAGE_SIZE == heap->remaining);
+    ASSERT(post_most_free_blocks == heap->free_blocks);
+
+    /* No move when you realloc the same size.  */
+    uint8_t *p_again = cmpct_realloc_impl(heap, p, PAGE_SIZE * 6);
+    ASSERT(p_again == p);
+    ASSERT(post_most_remaining - 6 * PAGE_SIZE == heap->remaining);
+    ASSERT(post_most_free_blocks == heap->free_blocks);
+
+    /* No move when you realloc one more page.  */
+    uint8_t *p7 = cmpct_realloc_impl(heap, p_again, PAGE_SIZE * 7);
+    ASSERT(p7 == p);
+    ASSERT(post_most_remaining - 7 * PAGE_SIZE == heap->remaining);
+    ASSERT(post_most_free_blocks == heap->free_blocks);
+
+    /* No move when you realloc one more page, but now there are no more pages
+       at the end so the number of free blocks is reduced.  */
+    uint8_t *p8 = cmpct_realloc_impl(heap, p7, PAGE_SIZE * 8);
+    ASSERT(p8 == p);
+    ASSERT(post_most_remaining - 8 * PAGE_SIZE == heap->remaining);
+    ASSERT(post_most_free_blocks - 1 == heap->free_blocks);
+
+    /* Shrink the allocation a little, creating a free page at the end.  */
+    p7 = cmpct_realloc_impl(heap, p8, PAGE_SIZE * 7);
+    ASSERT(p7 == p8);
+    ASSERT(post_most_remaining - 7 * PAGE_SIZE == heap->remaining);
+    ASSERT(post_most_free_blocks == heap->free_blocks);
+
+    /* Free the block allocations near the end.  */
+    cmpct_free_impl(heap, p7);
+    ASSERT(post_most_remaining == heap->remaining);
+    ASSERT(post_most_free_blocks == heap->free_blocks);
+
+    /* Test overlapping realloc when there is space before the
+       current allocation.  */
+    uint8_t *disappearer = cmpct_malloc_impl(heap, PAGE_SIZE);
+
+    p = cmpct_malloc_impl(heap, PAGE_SIZE * 5);
+    ASSERT(disappearer + PAGE_SIZE == p);
+
+    ASSERT(post_most_remaining - 6 * PAGE_SIZE == heap->remaining);
+    ASSERT(post_most_free_blocks == heap->free_blocks);
+
+    /* Make a hole.  */
+    cmpct_free_impl(heap, disappearer);
+
+    ASSERT(post_most_remaining - 5 * PAGE_SIZE == heap->remaining);
+    ASSERT(post_most_free_blocks + 1 == heap->free_blocks);
+
+    /*  Grow realloc towards the end of the heap. */
+    p7 = cmpct_realloc_impl(heap, p, PAGE_SIZE * 7);
+    ASSERT(p7 == p);
+
+    /*  Now the space at the end was used up and the number of free blocks
+        falls again.  */
+    ASSERT(post_most_remaining - 7 * PAGE_SIZE == heap->remaining);
+    ASSERT(post_most_free_blocks == heap->free_blocks);
+
+    /*  Forced to step backwards to realloc into the gap.  */
+    p8 = cmpct_realloc_impl(heap, p, PAGE_SIZE * 8);
+    ASSERT(p8 == p7 - PAGE_SIZE);
+
+    ASSERT(post_most_remaining - 8 * PAGE_SIZE == heap->remaining);
+    ASSERT(post_most_free_blocks - 1 == heap->free_blocks);
+
+    cmpct_free_impl(heap, p8);
+
+    ASSERT(post_most_remaining  == heap->remaining);
+    ASSERT(post_most_free_blocks == heap->free_blocks);
+
+    cmpct_free_impl(heap, most_of_the_heap);
+
+    ASSERT(post_churn_remaining == heap->remaining);
+    ASSERT(post_churn_free_blocks == heap->free_blocks);
 }
 
 static void cmpct_test_get_back_newly_freed(cmpct_heap_t *heap)
@@ -1009,16 +1124,6 @@ IRAM_ATTR static size_t allocation_size(void *payload)
     return size;
 }
 
-IRAM_ATTR void *cmpct_realloc(cmpct_heap_t *heap, void *payload, size_t size)
-{
-    if (payload == NULL) return cmpct_alloc(heap, size);
-    size_t old_size = allocation_size(payload);
-    void *new_payload = cmpct_alloc(heap, size);
-    memcpy(new_payload, payload, MIN(size, old_size));
-    cmpct_free(heap, payload);
-    return new_payload;
-}
-
 // Each allocation area has an arena structure at the start to link them
 // together and a sentinel at either end that is the size of one header.
 static const size_t arena_overhead = 2 * sizeof(header_t) + sizeof(arena_t);
@@ -1282,6 +1387,7 @@ IRAM_ATTR static size_t page_number(cmpct_heap_t *heap, void *p)
     return page;
 }
 
+/* Can be called without the lock. */
 IRAM_ATTR size_t cmpct_get_allocated_size_impl(cmpct_heap_t *heap, void *p)
 {
     if (p == NULL) return 0;
@@ -1291,24 +1397,121 @@ IRAM_ATTR size_t cmpct_get_allocated_size_impl(cmpct_heap_t *heap, void *p)
     }
     size_t page = page_number(heap, p);
     for (size_t i = 1; true; i++) {
+        /* The pages always end with a dummy allocated page.
+           Since we don't necessarily have the lock the status of the
+           one-past-the-end page may change between PAGE_FREE and PAGE_IN_USE,
+           but both will give the same result here.  */
         if (heap->pages[page + i].status != PAGE_CONTINUED) return i << PAGE_SIZE_SHIFT;
     }
 }
 
-// This is a very simple version of realloc, which always creates a new
-// area and copies to it.
+/* Effectuates a page-based realloc when we have found an overlapping new area
+   big enough for the allocation.
+   Called with the lock.  */
+IRAM_ATTR static void *page_grow_allocation(cmpct_heap_t *heap, void *p, size_t old_page, size_t old_pages, size_t new_page, size_t new_pages) {
+    heap->pages[new_page].status = PAGE_IN_USE;
+    for (size_t j = new_page + 1; j < new_page + new_pages; j++) {
+        heap->pages[j].status = PAGE_CONTINUED;
+    }
+    /* Adjust the heap accounting.  */
+    if (new_page != old_page &&
+        (new_page == 0 || heap->pages[new_page - 1].status != PAGE_FREE)) {
+        heap->free_blocks--;
+    }
+    if (new_page + new_pages != old_page + old_pages &&
+        heap->pages[new_page + new_pages].status != PAGE_FREE) {
+        heap->free_blocks--;
+    }
+    heap->remaining -= (new_pages - old_pages) << PAGE_SIZE_SHIFT;
+    /* Move the data to the new location.  */
+    size_t distance = (old_page - new_page) << PAGE_SIZE_SHIFT;
+    if (distance == 0) return p;
+    uint8_t* destination = (uint8_t *)p - distance;
+    memmove(destination, p, old_pages << PAGE_SIZE_SHIFT);
+    return destination;
+}
+
+/* Attempts to grow the current page-based allocation into adjacent pages
+   or shrink the current page-based allocation without moving data.
+   Called with the lock.  */
+IRAM_ATTR static void *realloc_page_allocation(cmpct_heap_t *heap, void *p, size_t size, size_t old_size)
+{
+    size_t new_pages = ROUND_UP(size, PAGE_SIZE) >> PAGE_SIZE_SHIFT;
+    size_t old_pages = old_size >> PAGE_SIZE_SHIFT;
+    if (new_pages == old_pages) return p;
+    size_t page = page_number(heap, p);
+    if (new_pages > old_pages) {
+        /* Growing a page allocation. */
+        for (size_t i = page + old_pages; i < page + new_pages; i++) {
+            if (heap->pages[i].status != PAGE_FREE) {
+                /* Failed to grow only forwards - can we grow backwards? */
+                if (i < new_pages) return NULL;
+                size_t first_page = i - new_pages;
+                for (size_t j = first_page; j < page; j++) {
+                    if (heap->pages[j].status != PAGE_FREE) {
+                        return NULL;
+                    }
+                }
+                return page_grow_allocation(heap, p, page, old_pages, first_page, new_pages);
+            }
+        }
+        return page_grow_allocation(heap, p, page, old_pages, page, new_pages);
+    } else {
+        /* Shrinking a page allocation. */
+        for (size_t i = page + new_pages; i < page + old_pages; i++) {
+            heap->pages[i].status = PAGE_FREE;
+        }
+        if (heap->pages[page + old_pages].status != PAGE_FREE) {
+            heap->free_blocks++;
+        }
+        heap->remaining += (old_pages - new_pages) << PAGE_SIZE_SHIFT;
+        return p;
+    }
+}
+
+/* This realloc implementation always first tries to create a new allocation
+   and copy the data.  There are so few chances to defragment a malloc heap
+   that we will try to move the data when we can.
+
+   If this fails we may just return the original area if the size is close
+   enough.
+
+   For large (page-based) failing reallocations we attempt a new allocation
+   that overlaps with the old one.  */
 IRAM_ATTR void *cmpct_realloc_impl(cmpct_heap_t *heap, void *p, size_t size)
 {
     if (!size) {
         cmpct_free_impl(heap, p);
+        /* C++ "new" does not like null responses for zero-length allocations,
+           but it never calls realloc so we can get away with it here.  */
         return NULL;
     }
     void *new_allocation = cmpct_malloc_impl(heap, size);
-    if (!p || !new_allocation) return new_allocation;
+    if (!p) return new_allocation;
     size_t old_size = cmpct_get_allocated_size_impl(heap, p);
-    memcpy(new_allocation, p, MIN(old_size, size));
-    cmpct_free_impl(heap, p);
-    return new_allocation;
+    if (new_allocation) {
+        memcpy(new_allocation, p, MIN(old_size, size));
+        cmpct_free_impl(heap, p);
+        return new_allocation;
+    }
+    if (is_page_allocated(heap, p)) {
+        lock(heap);
+        void *result = realloc_page_allocation(heap, p, size, old_size);
+        unlock(heap);
+        return result;
+    } else {
+        /* We know the old area was not page allocated, which puts an
+           upper bound on how large it could be.  Therefore it can't
+           overflow the calculation below.  */
+        if (size <= old_size && size + sizeof(free_t) > (old_size * 4) / 3) {
+            /* We are already in roughly the correct bucket, do nothing.
+               Since the old_size is often larger than the original requested
+               allocation we may hit this case even when growing the
+               allocation.  */
+            return p;
+        }
+        return NULL;
+    }
 }
 
 size_t cmpct_free_size_impl(cmpct_heap_t *heap)
@@ -1605,7 +1808,7 @@ void cmpct_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void
 }
 
 #ifdef TEST_CMPCTMALLOC
-/* Run the tests with:
+/* Install gcc-multilib, then run the tests with:
 gcc -m32 -ffreestanding -fsanitize=address -DTEST_CMPCTMALLOC -DDEBUG=1 -g -o test third_party/esp-idf/components/heap/third_party/dartino/cmpctmalloc.c -pthread && ./test
 gcc      -ffreestanding -fsanitize=address -DTEST_CMPCTMALLOC -DDEBUG=1 -g -o test third_party/esp-idf/components/heap/third_party/dartino/cmpctmalloc.c -pthread && ./test
  */
@@ -1635,6 +1838,7 @@ int main(int argc, char *argv[])
     ASSERT(heap_remaining >= heap->size * 0.98);
     ASSERT(heap_remaining <= heap->size);
     assert_heap_is_empty(heap);
+    cmpct_test_realloc(heap);
     cmpct_test_get_back_newly_freed(heap);
     cmpct_test_huge_allocations(heap);
     pthread_key_create(&tls_key, NULL);
