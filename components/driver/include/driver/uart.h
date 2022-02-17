@@ -541,6 +541,51 @@ int uart_write_bytes(uart_port_t uart_num, const void* src, size_t size);
 int uart_write_bytes_with_break(uart_port_t uart_num, const void* src, size_t size, int brk_len);
 
 /**
+ * @brief Send data to the UART port from a given buffer and length.
+ *
+ * If the UART driver's parameter 'tx_buffer_size' is set to zero:
+ * This function return the number of bytes that were sent out, or at least pushed into TX FIFO.
+ *
+ * Otherwise, if the 'tx_buffer_size' > 0, this function will return the number of bytes copied to the tx ring buffer,
+ * UART ISR will then move data from the ring buffer to TX FIFO gradually.
+ *
+ * This function will not block, but may send fewer bytes than requested, even sending zero if there is no space.
+ *
+ * @param uart_num UART port number, the max port number is (UART_NUM_MAX -1).
+ * @param src   data buffer address
+ * @param size  data length to send
+ *
+ * @return
+ *     - (-1) Parameter error
+ *     - OTHERS (>=0) The number of bytes pushed to the TX FIFO
+ */
+int uart_write_bytes_non_blocking(uart_port_t uart_num, const void* src, size_t size);
+
+/**
+ * @brief Send data to the UART port from a given buffer and length.
+ *
+ * If the UART driver's parameter 'tx_buffer_size' is set to zero:
+ * This function return the number of bytes that were sent out, or at least pushed into TX FIFO.
+ *
+ * Otherwise, if the 'tx_buffer_size' > 0, this function will return the number of bytes copied to the tx ring buffer,
+ * UART ISR will then move data from the ring buffer to TX FIFO gradually.
+ *
+ * This function will not block, but may send fewer bytes than requested, even sending zero if there is no space.
+ *
+ * After all data is sent out, send a break signal.  If the value returned is less than size, no break signal was sent.
+ *
+ * @param uart_num UART port number, the max port number is (UART_NUM_MAX -1).
+ * @param src   data buffer address
+ * @param size  data length to send
+ * @param brk_len break signal duration(unit: the time it takes to send one bit at current baudrate)
+ *
+ * @return
+ *     - (-1) Parameter error
+ *     - OTHERS (>=0) The number of bytes pushed to the TX FIFO
+ */
+int uart_write_bytes_with_break_non_blocking(uart_port_t uart_num, const void* src, size_t size, int brk_len);
+
+/**
  * @brief UART read bytes from UART buffer
  *
  * @param uart_num UART port number, the max port number is (UART_NUM_MAX -1).

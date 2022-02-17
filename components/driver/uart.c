@@ -1102,7 +1102,7 @@ int uart_tx_chars(uart_port_t uart_num, const char* buffer, uint32_t len)
     return tx_len;
 }
 
-static int uart_tx_all(uart_port_t uart_num, const char* src, size_t size, bool brk_en, int brk_len)
+static int uart_tx(uart_port_t uart_num, bool write_all, const char* src, size_t size, bool brk_en, int brk_len)
 {
     if(size == 0) {
         return 0;
@@ -1114,6 +1114,10 @@ static int uart_tx_all(uart_port_t uart_num, const char* src, size_t size, bool 
     p_uart_obj[uart_num]->coll_det_flg = false;
     if(p_uart_obj[uart_num]->tx_buf_size > 0) {
         size_t max_size = xRingbufferGetMaxItemSize(p_uart_obj[uart_num]->tx_ring_buf);
+        if(!write_all) {
+            size_t max_free = xRingbufferGetCurFreeSize(p_uart_obj[uart_num]->tx_ring_buf);
+            max_size = max_size < max_free ? max_size : max_free;
+        }
         int offset = 0;
         uart_tx_data_t evt;
         evt.tx_data.size = size;
@@ -1130,6 +1134,9 @@ static int uart_tx_all(uart_port_t uart_num, const char* src, size_t size, bool 
             size -= send_size;
             offset += send_size;
             uart_enable_tx_intr(uart_num, 1, UART_EMPTY_THRESH_DEFAULT);
+            if (!write_all) {
+                break;
+            }
         }
     } else {
         while(size) {
@@ -1150,8 +1157,11 @@ static int uart_tx_all(uart_port_t uart_num, const char* src, size_t size, bool 
                 size -= sent;
                 src += sent;
             }
+            if (!write_all) {
+                break;
+            }
         }
-        if(brk_en) {
+        if(brk_en && size == 0) {
             uart_hal_clr_intsts_mask(&(uart_context[uart_num].hal), UART_INTR_TX_BRK_DONE);
             UART_ENTER_CRITICAL(&(uart_context[uart_num].spinlock));
             uart_hal_tx_break(&(uart_context[uart_num].hal), brk_len);
@@ -1162,7 +1172,7 @@ static int uart_tx_all(uart_port_t uart_num, const char* src, size_t size, bool 
         xSemaphoreGive(p_uart_obj[uart_num]->tx_fifo_sem);
     }
     xSemaphoreGive(p_uart_obj[uart_num]->tx_mux);
-    return original_size;
+    return original_size - size;
 }
 
 int uart_write_bytes(uart_port_t uart_num, const void* src, size_t size)
@@ -1170,7 +1180,7 @@ int uart_write_bytes(uart_port_t uart_num, const void* src, size_t size)
     UART_CHECK((uart_num < UART_NUM_MAX), "uart_num error", (-1));
     UART_CHECK((p_uart_obj[uart_num] != NULL), "uart driver error", (-1));
     UART_CHECK(src, "buffer null", (-1));
-    return uart_tx_all(uart_num, src, size, 0, 0);
+    return uart_tx(uart_num, true, src, size, 0, 0);
 }
 
 int uart_write_bytes_with_break(uart_port_t uart_num, const void* src, size_t size, int brk_len)
@@ -1180,7 +1190,25 @@ int uart_write_bytes_with_break(uart_port_t uart_num, const void* src, size_t si
     UART_CHECK((size > 0), "uart size error", (-1));
     UART_CHECK((src), "uart data null", (-1));
     UART_CHECK((brk_len > 0 && brk_len < 256), "break_num error", (-1));
-    return uart_tx_all(uart_num, src, size, 1, brk_len);
+    return uart_tx(uart_num, true, src, size, 1, brk_len);
+}
+
+int uart_write_bytes_non_blocking(uart_port_t uart_num, const void* src, size_t size)
+{
+    UART_CHECK((uart_num < UART_NUM_MAX), "uart_num error", (-1));
+    UART_CHECK((p_uart_obj[uart_num] != NULL), "uart driver error", (-1));
+    UART_CHECK(src, "buffer null", (-1));
+    return uart_tx(uart_num, false, src, size, 0, 0);
+}
+
+int uart_write_bytes_with_break_non_blocking(uart_port_t uart_num, const void* src, size_t size, int brk_len)
+{
+    UART_CHECK((uart_num < UART_NUM_MAX), "uart_num error", (-1));
+    UART_CHECK((p_uart_obj[uart_num]), "uart driver error", (-1));
+    UART_CHECK((size > 0), "uart size error", (-1));
+    UART_CHECK((src), "uart data null", (-1));
+    UART_CHECK((brk_len > 0 && brk_len < 256), "break_num error", (-1));
+    return uart_tx(uart_num, false, src, size, 1, brk_len);
 }
 
 static bool uart_check_buf_full(uart_port_t uart_num)
