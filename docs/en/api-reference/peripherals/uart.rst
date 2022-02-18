@@ -171,7 +171,9 @@ The function :cpp:func:`uart_write_bytes_with_break` is similar to :cpp:func:`ua
     // Write data to UART, end with a break signal.
     uart_write_bytes_with_break(uart_num, "test break\n",strlen("test break\n"), 100);
 
-Another function for writing data to the Tx FIFO buffer is :cpp:func:`uart_tx_chars`. Unlike :cpp:func:`uart_write_bytes`, this function will not block until space is available. Instead, it will write all data which can immediately fit into the hardware Tx FIFO, and then return the number of bytes that were written.
+As an alternative to :cpp:func:`uart_write_bytes` and :cpp:func:`uart_write_bytes_with_break` you can also use :cpp:func:`uart_write_bytes_non_blocking` or :cpp:func:`uart_write_bytes_with_break_non_blocking`.  These will never block, but may write fewer bytes than requested.  As with the regular functions, the number of bytes actually written is returned.
+
+Another function for writing data to the Tx FIFO buffer is :cpp:func:`uart_tx_chars`. Unlike :cpp:func:`uart_write_bytes`, this function will not block until space is available. Instead, it will write all data which can immediately fit into the hardware Tx FIFO, and then return the number of bytes that were written.  This should only be used if the UART was configures without a transmit buffer.
 
 There is a 'companion' function :cpp:func:`uart_wait_tx_done` that monitors the status of the Tx FIFO buffer and returns once it is empty.
 
