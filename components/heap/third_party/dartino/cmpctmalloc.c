@@ -147,8 +147,8 @@ static int first_allocations = true;
 #define IS_ALIGNED(x, alignment) (((x) & ((alignment) - 1)) == 0)
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
-// Provoke crash.
-#define FATAL(reason) abort()
+// Provoke crash.  Often because of a double free.
+#define FATAL(reason) do { *(char*)(0xdeadf1ee) = 0; abort(); } while (0)
 #define INLINE __attribute__((always_inline)) inline
 
 // This is a two layer allocator.  Allocations that are a multiple of 4k in
