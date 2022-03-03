@@ -1073,7 +1073,7 @@ IRAM_ATTR void cmpct_free_optionally_locked(cmpct_heap_t *heap, void *payload, b
     if (payload == NULL) return;
     if (heap->ignore_free) return;
     header_t *header = (header_t *)payload - 1;
-    if (is_tagged_as_free(header)) FATAL("Double free");
+    if (is_tagged_as_free(header)) FATAL("Invalid free");
     size_t size = get_size(header);
     if (use_locking) lock(heap);
     heap->allocated_blocks--;
@@ -1364,7 +1364,9 @@ IRAM_ATTR static bool is_page_allocated(cmpct_heap_t *heap, void *p)
     // The others are marked as PAGE_CONTINUED.  This also applies to multiple
     // pages that were taken from the page allocator for use in a multi-page
     // arena.
-    return heap->pages[page].status == PAGE_IN_USE;
+    int status = heap->pages[page].status;
+    if (status == PAGE_FREE) FATAL("Invalid free");
+    return status == PAGE_IN_USE;
 }
 
 IRAM_ATTR void cmpct_free_impl(cmpct_heap_t *heap, void *p)
