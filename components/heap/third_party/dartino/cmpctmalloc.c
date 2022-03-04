@@ -147,8 +147,8 @@ static int first_allocations = true;
 #define IS_ALIGNED(x, alignment) (((x) & ((alignment) - 1)) == 0)
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
-// Provoke crash.
-#define FATAL(reason) abort()
+// Provoke crash.  Often because of a double free.
+#define FATAL(reason) do { *(char*)(0xdeadf1ee) = 0; abort(); } while (0)
 #define INLINE __attribute__((always_inline)) inline
 
 // This is a two layer allocator.  Allocations that are a multiple of 4k in
@@ -1073,7 +1073,7 @@ IRAM_ATTR void cmpct_free_optionally_locked(cmpct_heap_t *heap, void *payload, b
     if (payload == NULL) return;
     if (heap->ignore_free) return;
     header_t *header = (header_t *)payload - 1;
-    if (is_tagged_as_free(header)) FATAL("Double free");
+    if (is_tagged_as_free(header)) FATAL("Invalid free");
     size_t size = get_size(header);
     if (use_locking) lock(heap);
     heap->allocated_blocks--;
@@ -1364,7 +1364,9 @@ IRAM_ATTR static bool is_page_allocated(cmpct_heap_t *heap, void *p)
     // The others are marked as PAGE_CONTINUED.  This also applies to multiple
     // pages that were taken from the page allocator for use in a multi-page
     // arena.
-    return heap->pages[page].status == PAGE_IN_USE;
+    int status = heap->pages[page].status;
+    if (status == PAGE_FREE) FATAL("Invalid free");
+    return status == PAGE_IN_USE;
 }
 
 IRAM_ATTR void cmpct_free_impl(cmpct_heap_t *heap, void *p)
