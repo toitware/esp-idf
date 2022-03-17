@@ -683,6 +683,24 @@ static void cmpct_test_huge_allocations(cmpct_heap_t *heap)
     }
 }
 
+static void cmpct_test_get_info(cmpct_heap_t *heap)
+{
+    multi_heap_info_t info;
+    cmpct_get_info_impl(heap, &info);
+    size_t free_bytes_1 = info.total_free_bytes;
+
+    size_t SIZE = 1024 * 16;
+
+    void* p = cmpct_malloc_impl(heap, SIZE);
+
+    cmpct_get_info_impl(heap, &info);
+    size_t free_bytes_2 = info.total_free_bytes;
+
+
+    ASSERT(free_bytes_2 + SIZE == free_bytes_1);
+    cmpct_free_impl(heap, p);
+}
+
 static void cmpct_test_realloc(cmpct_heap_t *heap)
 {
     size_t pre_churn_remaining = heap->remaining;
@@ -1546,7 +1564,6 @@ void cmpct_get_info_impl(cmpct_heap_t *heap, multi_heap_info_t *info)
             current_page_run += PAGE_SIZE;
         } else {
             if (current_status == PAGE_FREE) {
-                info->total_free_bytes += current_page_run;
                 if (current_page_run != 0) {
                     info->free_blocks++;
                     if (current_page_run > info->largest_free_block) {
@@ -1828,6 +1845,7 @@ int main(int argc, char *argv[])
     int TEST_HEAP_SIZE = 1500000;
     void *arena = malloc(TEST_HEAP_SIZE);
     cmpct_heap_t *heap = cmpct_register_impl(arena, TEST_HEAP_SIZE);
+
     bool start_aligned = (size_t)arena == ROUND_DOWN((size_t)arena, PAGE_SIZE);
     // One free area for all the aligned pages and one each for the ends
     // that were used for arena allocation.
@@ -1840,6 +1858,7 @@ int main(int argc, char *argv[])
     ASSERT(heap_remaining >= heap->size * 0.98);
     ASSERT(heap_remaining <= heap->size);
     assert_heap_is_empty(heap);
+    cmpct_test_get_info(heap);
     cmpct_test_realloc(heap);
     cmpct_test_get_back_newly_freed(heap);
     cmpct_test_huge_allocations(heap);
@@ -1853,9 +1872,11 @@ int main(int argc, char *argv[])
     ASSERT(heap->remaining == heap_remaining);
     assert_heap_is_empty(heap);
 
+    free(arena);
+
     for (int size = 0; size < 12000; size++) {
         int first_success = -1;
-        arena = malloc(size);
+        void* arena = malloc(size);
         cmpct_heap_t* small_heap = cmpct_register_impl(arena, size);
         if (small_heap == NULL) {
             ASSERT(size < sizeof(cmpct_heap_t));
