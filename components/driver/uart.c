@@ -1660,24 +1660,12 @@ esp_err_t uart_driver_install(uart_port_t uart_num, int rx_buffer_size, int tx_b
         p_uart_obj[uart_num]->tx_brk_len = 0;
         p_uart_obj[uart_num]->tx_waiting_brk = 0;
         p_uart_obj[uart_num]->rx_buffered_len = 0;
-            if (!p_uart_obj[uart_num]->xQueueUart) {
-                r = ESP_ERR_NO_MEM;
-                goto err;
-            }
         p_uart_obj[uart_num]->rx_buffer_full_flg = false;
         p_uart_obj[uart_num]->tx_waiting_fifo = false;
         p_uart_obj[uart_num]->rx_ptr = NULL;
         p_uart_obj[uart_num]->rx_cur_remain = 0;
         p_uart_obj[uart_num]->rx_int_usr_mask = UART_INTR_RXFIFO_FULL | UART_INTR_RXFIFO_TOUT;
         p_uart_obj[uart_num]->rx_head_ptr = NULL;
-        if (!p_uart_obj[uart_num]->rx_ring_buf) {
-            r = ESP_ERR_NO_MEM;
-            goto err;
-        }
-            if (!p_uart_obj[uart_num]->tx_ring_buf) {
-                r = ESP_ERR_NO_MEM;
-                goto err;
-            }
         p_uart_obj[uart_num]->tx_buf_size = tx_buffer_size;
         p_uart_obj[uart_num]->uart_select_notif_callback = NULL;
         xSemaphoreGive(p_uart_obj[uart_num]->tx_fifo_sem);
