@@ -99,9 +99,11 @@ void rtc_sleep_init(rtc_sleep_config_t cfg)
 
     REG_SET_FIELD(RTC_CNTL_BIAS_CONF_REG, RTC_CNTL_DBG_ATTEN_MONITOR, RTC_CNTL_DBG_ATTEN_MONITOR_DEFAULT);
     REG_SET_FIELD(RTC_CNTL_BIAS_CONF_REG, RTC_CNTL_BIAS_SLEEP_MONITOR, RTC_CNTL_BIASSLP_MONITOR_DEFAULT);
-    REG_SET_FIELD(RTC_CNTL_BIAS_CONF_REG, RTC_CNTL_BIAS_SLEEP_DEEP_SLP, RTC_CNTL_BIASSLP_SLEEP_DEFAULT);
+    REG_SET_FIELD(RTC_CNTL_BIAS_CONF_REG, RTC_CNTL_BIAS_SLEEP_DEEP_SLP,
+            (!cfg.deep_slp && cfg.xtal_fpu) ? RTC_CNTL_BIASSLP_SLEEP_ON : RTC_CNTL_BIASSLP_SLEEP_DEFAULT);
     REG_SET_FIELD(RTC_CNTL_BIAS_CONF_REG, RTC_CNTL_PD_CUR_MONITOR, RTC_CNTL_PD_CUR_MONITOR_DEFAULT);
-    REG_SET_FIELD(RTC_CNTL_BIAS_CONF_REG, RTC_CNTL_PD_CUR_DEEP_SLP, RTC_CNTL_PD_CUR_SLEEP_DEFAULT);
+    REG_SET_FIELD(RTC_CNTL_BIAS_CONF_REG, RTC_CNTL_PD_CUR_DEEP_SLP,
+            (!cfg.deep_slp && cfg.xtal_fpu) ? RTC_CNTL_PD_CUR_SLEEP_ON : RTC_CNTL_PD_CUR_SLEEP_DEFAULT);
     if (cfg.deep_slp) {
         CLEAR_PERI_REG_MASK(RTC_CNTL_REG, RTC_CNTL_REGULATOR_FORCE_PU);
         REG_SET_FIELD(RTC_CNTL_BIAS_CONF_REG, RTC_CNTL_DBG_ATTEN_DEEP_SLP, RTC_CNTL_DBG_ATTEN_DEEPSLEEP_DEFAULT);
@@ -111,9 +113,18 @@ void rtc_sleep_init(rtc_sleep_config_t cfg)
                             RTC_CNTL_RFRX_PBUS_PU | RTC_CNTL_TXRF_I2C_PU);
         CLEAR_PERI_REG_MASK(RTC_CNTL_OPTIONS0_REG, RTC_CNTL_BB_I2C_FORCE_PU);
     } else {
-	SET_PERI_REG_MASK(RTC_CNTL_REG, RTC_CNTL_REGULATOR_FORCE_PU);
+        SET_PERI_REG_MASK(RTC_CNTL_REG, RTC_CNTL_REGULATOR_FORCE_PU);
         CLEAR_PERI_REG_MASK(RTC_CNTL_DIG_PWC_REG, RTC_CNTL_DG_WRAP_PD_EN);
-        REG_SET_FIELD(RTC_CNTL_BIAS_CONF_REG, RTC_CNTL_DBG_ATTEN_DEEP_SLP, RTC_CNTL_DBG_ATTEN_LIGHTSLEEP_DEFAULT);
+        REG_SET_FIELD(RTC_CNTL_BIAS_CONF_REG, RTC_CNTL_DBG_ATTEN_DEEP_SLP,
+                cfg.int_8m_pd_en ? RTC_CNTL_DBG_ATTEN_LIGHTSLEEP_DEFAULT : RTC_CNTL_DBG_ATTEN_LIGHTSLEEP_NODROP);
+    }
+
+    //Keep the RTC8M_CLK on in light_sleep mode if the ledc low-speed channel is clocked by RTC8M_CLK.
+    if (!cfg.int_8m_pd_en && GET_PERI_REG_MASK(RTC_CNTL_CLK_CONF_REG, RTC_CNTL_DIG_CLK8M_EN_M)) {
+        REG_CLR_BIT(RTC_CNTL_CLK_CONF_REG, RTC_CNTL_CK8M_FORCE_PD);
+        REG_SET_BIT(RTC_CNTL_CLK_CONF_REG, RTC_CNTL_CK8M_FORCE_PU);
+    } else {
+        REG_CLR_BIT(RTC_CNTL_CLK_CONF_REG, RTC_CNTL_CK8M_FORCE_PU);
     }
 
     /* enable VDDSDIO control by state machine */
@@ -127,6 +138,10 @@ void rtc_sleep_init(rtc_sleep_config_t cfg)
 
     REG_SET_FIELD(RTC_CNTL_SLP_REJECT_CONF_REG, RTC_CNTL_DEEP_SLP_REJECT_EN, cfg.deep_slp_reject);
     REG_SET_FIELD(RTC_CNTL_SLP_REJECT_CONF_REG, RTC_CNTL_LIGHT_SLP_REJECT_EN, cfg.light_slp_reject);
+    /* Set wait cycle for touch or COCPU after deep sleep and light sleep. */
+    REG_SET_FIELD(RTC_CNTL_TIMER2_REG, RTC_CNTL_ULPCP_TOUCH_START_WAIT, RTC_CNTL_ULPCP_TOUCH_START_WAIT_IN_SLEEP);
+
+    REG_SET_FIELD(RTC_CNTL_OPTIONS0_REG, RTC_CNTL_XTL_FORCE_PU, cfg.xtal_fpu);
 }
 
 void rtc_sleep_low_init(uint32_t slowclk_period)
@@ -144,8 +159,6 @@ void rtc_sleep_set_wakeup_time(uint64_t t)
 /* Read back 'reject' status when waking from light or deep sleep */
 static uint32_t rtc_sleep_finish(uint32_t lslp_mem_inf_fpu);
 
-static const unsigned DEEP_SLEEP_TOUCH_WAIT_CYCLE = 0xFF;
-
 uint32_t rtc_sleep_start(uint32_t wakeup_opt, uint32_t reject_opt, uint32_t lslp_mem_inf_fpu)
 {
     REG_SET_FIELD(RTC_CNTL_WAKEUP_STATE_REG, RTC_CNTL_WAKEUP_ENA, wakeup_opt);
@@ -156,9 +169,6 @@ uint32_t rtc_sleep_start(uint32_t wakeup_opt, uint32_t reject_opt, uint32_t lslp
 
     SET_PERI_REG_MASK(RTC_CNTL_INT_CLR_REG,
                       RTC_CNTL_SLP_REJECT_INT_CLR | RTC_CNTL_SLP_WAKEUP_INT_CLR);
-
-    /* Set wait cycle for touch or COCPU after deep sleep. */
-    REG_SET_FIELD(RTC_CNTL_TIMER2_REG, RTC_CNTL_ULPCP_TOUCH_START_WAIT, DEEP_SLEEP_TOUCH_WAIT_CYCLE);
 
     /* Start entry into sleep mode */
     SET_PERI_REG_MASK(RTC_CNTL_STATE0_REG, RTC_CNTL_SLEEP_EN);
@@ -220,23 +230,17 @@ uint32_t rtc_deep_sleep_start(uint32_t wakeup_opt, uint32_t reject_opt)
                  "s32i a2, %4, 0\n"
                  "memw\n"
 
-                 /* Set wait cycle for touch or COCPU after deep sleep (can be moved to C code part?) */
-                 "l32i a2, %5, 0\n"
-                 "and a2, a2, %6\n"
-                 "or a2, a2, %7\n"
-                 "s32i a2, %5, 0\n"
-
                  /* Set register bit to go into deep sleep */
-                 "l32i a2, %8, 0\n"
-                 "or   a2, a2, %9\n"
-                 "s32i a2, %8, 0\n"
+                 "l32i a2, %5, 0\n"
+                 "or   a2, a2, %6\n"
+                 "s32i a2, %5, 0\n"
                  "memw\n"
 
                  /* Wait for sleep reject interrupt (never finishes if successful) */
                  ".Lwaitsleep:"
                  "memw\n"
-                 "l32i a2, %10, 0\n"
-                 "and a2, a2, %11\n"
+                 "l32i a2, %7, 0\n"
+                 "and a2, a2, %8\n"
                  "beqz a2, .Lwaitsleep\n"
 
                  :
@@ -247,13 +251,10 @@ uint32_t rtc_deep_sleep_start(uint32_t wakeup_opt, uint32_t reject_opt)
                    "r" (DPORT_RTC_MEM_CRC_START), // %2
                    "r" (DPORT_RTC_FASTMEM_CRC_REG), // %3
                    "r" (RTC_MEMORY_CRC_REG), // %4
-                   "r" (RTC_CNTL_TIMER2_REG), // %5
-                   "r" (~RTC_CNTL_ULPCP_TOUCH_START_WAIT_M), // %6
-                   "r" (DEEP_SLEEP_TOUCH_WAIT_CYCLE << RTC_CNTL_ULPCP_TOUCH_START_WAIT_S), // %7
-                   "r" (RTC_CNTL_STATE0_REG), // %8
-                   "r" (RTC_CNTL_SLEEP_EN), // %9
-                   "r" (RTC_CNTL_INT_RAW_REG), // %10
-                   "r" (RTC_CNTL_SLP_REJECT_INT_RAW | RTC_CNTL_SLP_WAKEUP_INT_RAW) // %11
+                   "r" (RTC_CNTL_STATE0_REG), // %5
+                   "r" (RTC_CNTL_SLEEP_EN), // %6
+                   "r" (RTC_CNTL_INT_RAW_REG), // %7
+                   "r" (RTC_CNTL_SLP_REJECT_INT_RAW | RTC_CNTL_SLP_WAKEUP_INT_RAW) // %8
                  : "a2" // working register
                  );
 
@@ -272,5 +273,9 @@ static uint32_t rtc_sleep_finish(uint32_t lslp_mem_inf_fpu)
         rtc_sleep_pd_config_t pd_cfg = RTC_SLEEP_PD_CONFIG_ALL(0);
         rtc_sleep_pd(pd_cfg);
     }
+
+    /* Recover default wait cycle for touch or COCPU after wakeup. */
+    REG_SET_FIELD(RTC_CNTL_TIMER2_REG, RTC_CNTL_ULPCP_TOUCH_START_WAIT, RTC_CNTL_ULPCP_TOUCH_START_WAIT_DEFAULT);
+
     return reject;
 }

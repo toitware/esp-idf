@@ -365,6 +365,15 @@ menu "Bootloader config"
             in this area of memory, you can increase it. It must be a multiple of 4 bytes.
             This area (rtc_retain_mem_t) is reserved and has access from the bootloader and an application.
 
+    config BOOTLOADER_FLASH_XMC_SUPPORT
+        bool "Enable the support for flash chips of XMC (READ HELP FIRST)"
+        default y
+        help
+            Perform the startup flow recommended by XMC. Please consult XMC for the details of this flow.
+            XMC chips will be forbidden to be used, when this option is disabled.
+
+            DON'T DISABLE THIS UNLESS YOU KNOW WHAT YOU ARE DOING.
+
 endmenu  # Bootloader
 
 
@@ -472,6 +481,7 @@ menu "Security features"
         bool "Enable hardware Secure Boot in bootloader (READ DOCS FIRST)"
         default n
         depends on IDF_TARGET_ESP32 || IDF_TARGET_ESP32S2 || ESP32C3_REV_MIN_3
+        select ESPTOOLPY_NO_STUB if !IDF_TARGET_ESP32 && !IDF_TARGET_ESP32S2
         help
             Build a bootloader which enables Secure Boot on first boot.
 
@@ -582,6 +592,22 @@ menu "Security features"
             extract_public_key command.
 
             Refer to the Secure Boot section of the ESP-IDF Programmer's Guide for this version before enabling.
+
+    config SECURE_BOOT_ENABLE_AGGRESSIVE_KEY_REVOKE
+        bool "Enable Aggressive key revoke strategy"
+        depends on SECURE_BOOT && (IDF_TARGET_ESP32S2 || IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32S3)
+        default N
+        help
+            If this option is set, ROM bootloader will revoke the public key digest burned in efuse block
+            if it fails to verify the signature of software bootloader with it.
+            Revocation of keys does not happen when enabling secure boot. Once secure boot is enabled,
+            key revocation checks will be done on subsequent boot-up, while verifying the software bootloader
+
+            This feature provides a strong resistance against physical attacks on the device.
+
+            NOTE: Once a digest slot is revoked, it can never be used again to verify an image
+            This can lead to permanent bricking of the device, in case all keys are revoked
+            because of signature verification failure.
 
     choice SECURE_BOOTLOADER_KEY_ENCODING
         bool "Hardware Key Encoding"
@@ -732,9 +758,17 @@ menu "Security features"
                 efuse when Secure Boot is enabled. This prevents any more efuses from being read protected.
 
                 If this option is set, it will remain possible to write the EFUSE_RD_DIS efuse field after Secure
-                Boot is enabled. This may allow an attacker to read-protect the BLK2 efuse holding the public
-                key digest, causing an immediate denial of service and possibly allowing an additional fault
-                injection attack to bypass the signature protection.
+                Boot is enabled. This may allow an attacker to read-protect the BLK2 efuse (for ESP32) and
+                BLOCK4-BLOCK10 (i.e. BLOCK_KEY0-BLOCK_KEY5)(for other chips) holding the public key digest, causing an
+                immediate denial of service and possibly allowing an additional fault injection attack to
+                bypass the signature protection.
+
+                NOTE: Once a BLOCK is read-protected, the application will read all zeros from that block
+
+                NOTE: If "UART ROM download mode (Permanently disabled (recommended))" or
+                "UART ROM download mode (Permanently switch to Secure mode (recommended))" is set,
+                then it is __NOT__ possible to read/write efuses using espefuse.py utility.
+                However, efuse can be read/written from the application
 
         config SECURE_FLASH_UART_BOOTLOADER_ALLOW_ENC
             bool "Leave UART bootloader encryption enabled"

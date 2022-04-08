@@ -35,6 +35,7 @@
 #include "driver/periph_ctrl.h"
 #include "bootloader_clock.h"
 #include "soc/syscon_reg.h"
+#include "hal/clk_gate_ll.h"
 
 static const char *TAG = "clk";
 
@@ -218,9 +219,10 @@ __attribute__((weak)) void esp_perip_clk_init(void)
     /* For reason that only reset CPU, do not disable the clocks
      * that have been enabled before reset.
      */
-    if (rst_reas[0] >= TG0WDT_CPU_RESET &&
-            rst_reas[0] <= TG0WDT_CPU_RESET &&
-            rst_reas[0] != RTCWDT_BROWN_OUT_RESET) {
+    if (rst_reas[0] == TG0WDT_CPU_RESET ||
+            rst_reas[0] == RTC_SW_CPU_RESET ||
+            rst_reas[0] == RTCWDT_CPU_RESET ||
+            rst_reas[0] == TG1WDT_CPU_RESET) {
         common_perip_clk = ~DPORT_READ_PERI_REG(DPORT_PERIP_CLK_EN_REG);
         hwcrypto_perip_clk = ~DPORT_READ_PERI_REG(DPORT_PERIP_CLK_EN1_REG);
         wifi_bt_sdio_clk = ~DPORT_READ_PERI_REG(DPORT_WIFI_CLK_EN_REG);
@@ -312,6 +314,7 @@ __attribute__((weak)) void esp_perip_clk_init(void)
     DPORT_REG_SET_FIELD(DPORT_BT_LPCK_DIV_INT_REG, DPORT_BT_LPCK_DIV_NUM, 0);
     DPORT_CLEAR_PERI_REG_MASK(DPORT_BT_LPCK_DIV_FRAC_REG, DPORT_LPCLK_SEL_8M);
     DPORT_SET_PERI_REG_MASK(DPORT_BT_LPCK_DIV_FRAC_REG, DPORT_LPCLK_SEL_RTC_SLOW);
+
 
     /* Enable RNG clock. */
     periph_module_enable(PERIPH_RNG_MODULE);

@@ -36,11 +36,11 @@ Advantages
 
 - The RSA public key is stored on the device. The corresponding RSA private key is kept secret on a server and is never accessed by the device.
 
-  .. only:: esp32
+.. only:: esp32
 
     - Only one public key can be generated and stored in ESP32 ECO3 during manufacturing.
 
-  .. only:: esp32s2 or esp32c3
+.. only:: esp32s2 or esp32c3
 
     - Up to three public keys can be generated and stored in the chip during manufacturing.
 
@@ -152,19 +152,21 @@ eFuse usage
 
     - ABS_DONE_1 - Enables secure boot protection on boot.
 
-    - BLK2 - Stores the SHA-256 digest of the public key. SHA-256 hash of public key modulus, exponent, precalculated R & M’ values (represented as 776 bytes – offsets 36 to 812 - as per the :ref:`signature-block-format`) is written to an eFuse key block.
+    - BLK2 - Stores the SHA-256 digest of the public key. SHA-256 hash of public key modulus, exponent, precalculated R & M’ values (represented as 776 bytes – offsets 36 to 812 - as per the :ref:`signature-block-format`) is written to an eFuse key block. The write-protection bit must be set, but the read-protection bit must not.
 
 .. only:: esp32s2 or esp32c3
 
     - SECURE_BOOT_EN - Enables secure boot protection on boot.
 
-    - KEY_PURPOSE_X - Set the purpose of the key block on {IDF_TARGET_NAME} by programming SECURE_BOOT_DIGESTX (X = 0, 1, 2) into KEY_PURPOSE_X (X = 0, 1, 2, 3, 4, 5). Example: If KEY_PURPOSE_2 is set to SECURE_BOOT_DIGEST1, then BLOCK_KEY2 will have the Secure Boot V2 public key digest.
+    - KEY_PURPOSE_X - Set the purpose of the key block on {IDF_TARGET_NAME} by programming SECURE_BOOT_DIGESTX (X = 0, 1, 2) into KEY_PURPOSE_X (X = 0, 1, 2, 3, 4, 5). Example: If KEY_PURPOSE_2 is set to SECURE_BOOT_DIGEST1, then BLOCK_KEY2 will have the Secure Boot V2 public key digest. The write-protection bit must be set (this field does not have a read-protection bit).
 
-    - BLOCK_KEYX - The block contains the data corresponding to its purpose programmed in KEY_PURPOSE_X. Stores the SHA-256 digest of the public key. SHA-256 hash of public key modulus, exponent, precalculated R & M’ values (represented as 776 bytes – offsets 36 to 812 - as per the :ref:`signature-block-format`) is written to an eFuse key block.
+    - BLOCK_KEYX - The block contains the data corresponding to its purpose programmed in KEY_PURPOSE_X. Stores the SHA-256 digest of the public key. SHA-256 hash of public key modulus, exponent, precalculated R & M’ values (represented as 776 bytes – offsets 36 to 812 - as per the :ref:`signature-block-format`) is written to an eFuse key block. The write-protection bit must be set, but the read-protection bit must not.
 
     - KEY_REVOKEX - The revocation bits corresponding to each of the 3 key block. Ex. Setting KEY_REVOKE2 revokes the key block whose key purpose is SECURE_BOOT_DIGEST2.
 
     - SECURE_BOOT_AGGRESSIVE_REVOKE - Enables aggressive revocation of keys. The key is revoked as soon as verification with this key fails.
+
+The key(s) must be readable in order to give software access to it. If the key(s) is read-protected then the software reads the key(s) as all zeros and the signature verification process occurs with error, bootloader and app can not be run.
 
 .. _secure-boot-v2-howto:
 
@@ -296,7 +298,10 @@ Secure Boot Best Practices
     * Applications should be signed with only one key at a time, to minimise the exposure of unused private keys.
     * The bootloader can be signed with multiple keys from the factory.
 
-    Assuming a trusted private key (N-1) has been compromised, to update to new keypair (N).
+    Conservative approach:
+    ~~~~~~~~~~~~~~~~~~~~~~
+
+    Assuming a trusted private key (N-1) has been compromised, to update to new key pair (N).
 
     1. Server sends an OTA update with an application signed with the new private key (#N).
     2. The new OTA update is written to an unused OTA app partition.
@@ -307,6 +312,17 @@ Secure Boot Best Practices
     7. The API `esp_ota_revoke_secure_boot_public_key()` can be used to revoke the key #N-1.
 
     * A similiar approach can also be used to physically reflash with a new key. For physical reflashing, the bootloader content can also be changed at the same time.
+
+    Aggressive approach:
+    ~~~~~~~~~~~~~~~~~~~~
+
+    ROM code has an additional feature of revoking a public key digest if the signature verification fails.
+
+    To enable this feature, you need to burn SECURE_BOOT_AGGRESSIVE_REVOKE efuse or enable :ref:`CONFIG_SECURE_BOOT_ENABLE_AGGRESSIVE_KEY_REVOKE`
+
+    Key revocation is not applicable unless secure boot is successfully enabled. Also, a key is not revoked in case of invalid signature block or invalid image digest, it is only revoked in case the signature verification fails, i.e. revoke key only if failure in step 4 of :ref:`verify_signature-block`
+
+    Once a key is revoked, it can never be used for verfying a signature of an image. This feature provides strong resistance against physical attacks on the device. However, this could also brick the device permanently if all the keys are revoked because of signature verification failure.
 
 .. _secure-boot-v2-technical-details:
 
