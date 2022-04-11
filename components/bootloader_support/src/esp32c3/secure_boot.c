@@ -269,7 +269,7 @@ esp_err_t esp_secure_boot_v2_permanently_enable(const esp_image_metadata_t *imag
     ESP_LOGI(TAG, "Disable hardware & software JTAG...");
     esp_efuse_write_field_bit(ESP_EFUSE_DIS_PAD_JTAG);
     esp_efuse_write_field_bit(ESP_EFUSE_DIS_USB_JTAG);
-    esp_efuse_write_field_bit(ESP_EFUSE_SOFT_DIS_JTAG);
+    esp_efuse_write_field_cnt(ESP_EFUSE_SOFT_DIS_JTAG, ESP_EFUSE_SOFT_DIS_JTAG[0]->bit_count);
 #else
     ESP_LOGW(TAG, "Not disabling JTAG - SECURITY COMPROMISED");
 #endif
@@ -279,6 +279,21 @@ esp_err_t esp_secure_boot_v2_permanently_enable(const esp_image_metadata_t *imag
 #endif
 
     esp_efuse_write_field_bit(ESP_EFUSE_SECURE_BOOT_EN);
+
+#ifndef CONFIG_SECURE_BOOT_V2_ALLOW_EFUSE_RD_DIS
+    bool rd_dis_now = true;
+#ifdef CONFIG_SECURE_FLASH_ENC_ENABLED
+    /* If flash encryption is not enabled yet then don't read-disable efuses yet, do it later in the boot
+       when Flash Encryption is being enabled */
+    rd_dis_now = esp_flash_encryption_enabled();
+#endif
+    if (rd_dis_now) {
+        ESP_LOGI(TAG, "Prevent read disabling of additional efuses...");
+        esp_efuse_write_field_bit(ESP_EFUSE_WR_DIS_RD_DIS);
+    }
+#else
+    ESP_LOGW(TAG, "Allowing read disabling of additional efuses - SECURITY COMPROMISED");
+#endif
 
     esp_err_t err = esp_efuse_batch_write_commit();
     if (err != ESP_OK) {

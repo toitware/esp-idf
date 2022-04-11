@@ -373,6 +373,14 @@ menu "PHY"
                 3. Country configured by API esp_wifi_set_country()
                 and the parameter policy is WIFI_COUNTRY_POLICY_AUTO.
 
+        config ESP32_MULTIPLE_PHY_DATA_BIN_EMBEDDED
+            bool "Support embedded multiple phy init data bin to app bin"
+            depends on ESP32_SUPPORT_MULTIPLE_PHY_INIT_DATA_BIN
+            default n
+            help
+                If enabled, multiple phy init data bin will embedded into app bin
+                If not enabled, multiple phy init data bin will still leave alone, and need to be flashed by users.
+
         config ESP32_PHY_INIT_DATA_ERROR
             bool "Terminate operation when PHY init data error"
             depends on ESP32_SUPPORT_MULTIPLE_PHY_INIT_DATA_BIN
@@ -404,5 +412,13 @@ menu "PHY"
             down when PHY is disabled. Enabling this setting reduces power consumption
             by a small amount but increases RAM use by approximately 4 KB(Wi-Fi only),
             2 KB(Bluetooth only) or 5.3 KB(Wi-Fi + Bluetooth).
+
+    config ESP_PHY_ENABLE_USB
+        bool "Enable USB when phy init"
+        depends on ESP_CONSOLE_USB_SERIAL_JTAG
+        default y
+        help
+            When using USB Serial/JTAG controller, PHY should enable USB, otherwise log will
+            not be displayed. But working with USB, the RF performance may be affected.
 
 endmenu  # PHY

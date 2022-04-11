@@ -74,6 +74,10 @@ if(CONFIG_COMPILER_DISABLE_GCC8_WARNINGS)
                                 "-Wno-int-in-bool-context")
 endif()
 
+if(CONFIG_COMPILER_WARN_WRITE_STRINGS)
+    list(APPEND compile_options "-Wwrite-strings")
+endif()
+
 if(CONFIG_COMPILER_OPTIMIZATION_ASSERTIONS_DISABLE)
     list(APPEND compile_definitions "-DNDEBUG")
 endif()
@@ -88,6 +92,13 @@ endif()
 
 if(CONFIG_COMPILER_DUMP_RTL_FILES)
     list(APPEND compile_options "-fdump-rtl-expand")
+endif()
+
+if(NOT ${CMAKE_C_COMPILER_VERSION} VERSION_LESS 8.0.0)
+    if(CONFIG_COMPILER_HIDE_PATHS_MACROS)
+        list(APPEND compile_options "-fmacro-prefix-map=${CMAKE_SOURCE_DIR}=.")
+        list(APPEND compile_options "-fmacro-prefix-map=${IDF_PATH}=IDF")
+    endif()
 endif()
 
 # GCC-specific options

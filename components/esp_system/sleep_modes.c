@@ -29,6 +29,7 @@
 #include "soc/soc_caps.h"
 #include "driver/rtc_io.h"
 #include "hal/rtc_io_hal.h"
+#include "bootloader_common.h"
 
 #include "driver/uart.h"
 
@@ -53,6 +54,7 @@
 #include "esp32/clk.h"
 #include "esp32/rom/rtc.h"
 #include "esp_private/gpio.h"
+#include "esp32/spiram.h"
 #elif CONFIG_IDF_TARGET_ESP32S2
 #include "esp32s2/clk.h"
 #include "esp32s2/rom/cache.h"
@@ -60,11 +62,13 @@
 #include "esp32s2/brownout.h"
 #include "soc/extmem_reg.h"
 #include "esp_private/gpio.h"
+#include "esp32s2/spiram.h"
 #elif CONFIG_IDF_TARGET_ESP32S3
 #include "esp32s3/clk.h"
 #include "esp32s3/rom/cache.h"
 #include "esp32s3/rom/rtc.h"
 #include "soc/extmem_reg.h"
+#include "esp32s3/spiram.h"
 #elif CONFIG_IDF_TARGET_ESP32C3
 #include "esp32c3/clk.h"
 #include "esp32c3/rom/cache.h"
@@ -150,7 +154,13 @@ typedef struct {
 } sleep_config_t;
 
 static sleep_config_t s_config = {
-    .pd_options = { ESP_PD_OPTION_AUTO, ESP_PD_OPTION_AUTO, ESP_PD_OPTION_AUTO, ESP_PD_OPTION_AUTO, ESP_PD_OPTION_AUTO, ESP_PD_OPTION_AUTO },
+    .pd_options = {
+        ESP_PD_OPTION_AUTO, ESP_PD_OPTION_AUTO, ESP_PD_OPTION_AUTO, ESP_PD_OPTION_AUTO,
+#if SOC_PM_SUPPORT_CPU_PD
+        ESP_PD_OPTION_AUTO,
+#endif
+        ESP_PD_OPTION_AUTO, ESP_PD_OPTION_AUTO
+    },
     .ccount_ticks_record = 0,
     .sleep_time_overhead_out = DEFAULT_SLEEP_OUT_OVERHEAD_US,
     .wakeup_triggers = 0
@@ -418,6 +428,12 @@ void esp_sleep_config_gpio_isolate(void)
             gpio_sleep_set_pull_mode(gpio_num, GPIO_FLOATING);
         }
     }
+#if CONFIG_ESP_SYSTEM_PSRAM_LEAKAGE_WORKAROUND && CONFIG_SPIRAM
+    gpio_sleep_set_pull_mode(esp_spiram_get_cs_io(), GPIO_PULLUP_ONLY);
+#endif
+#if CONFIG_ESP_SYSTEM_FLASH_LEAKAGE_WORKAROUND
+    gpio_sleep_set_pull_mode(bootloader_flash_get_cs_io(), GPIO_PULLUP_ONLY);
+#endif
 }
 
 void esp_sleep_enable_gpio_switch(bool enable)
@@ -534,8 +550,7 @@ static uint32_t IRAM_ATTR esp_sleep_start(uint32_t pd_flags)
     }
 
     // Configure timer wakeup
-    if ((s_config.wakeup_triggers & RTC_TIMER_TRIG_EN) &&
-            s_config.sleep_duration > 0) {
+    if (s_config.wakeup_triggers & RTC_TIMER_TRIG_EN) {
         timer_wakeup_prepare();
     }
 
@@ -1302,22 +1317,19 @@ static uint32_t get_power_down_flags(void)
     if (s_config.cpu_pd_mem == NULL) {
         s_config.pd_options[ESP_PD_DOMAIN_CPU] = ESP_PD_OPTION_ON;
     }
-#else
-    if (s_config.pd_options[ESP_PD_DOMAIN_CPU] != ESP_PD_OPTION_ON) {
-        s_config.pd_options[ESP_PD_DOMAIN_CPU] = ESP_PD_OPTION_ON;
-    }
 #endif
 
-    if (s_config.pd_options[ESP_PD_DOMAIN_XTAL] == ESP_PD_OPTION_AUTO) {
-        s_config.pd_options[ESP_PD_DOMAIN_XTAL] = ESP_PD_OPTION_OFF;
-    }
+#ifdef CONFIG_IDF_TARGET_ESP32
+    s_config.pd_options[ESP_PD_DOMAIN_XTAL] = ESP_PD_OPTION_OFF;
+#endif
 
     const char *option_str[] = {"OFF", "ON", "AUTO(OFF)" /* Auto works as OFF */};
-    ESP_LOGD(TAG, "RTC_PERIPH: %s", option_str[s_config.pd_options[ESP_PD_DOMAIN_RTC_PERIPH]]);
+    /* This function is called from a critical section, log with ESP_EARLY_LOGD. */
+    ESP_EARLY_LOGD(TAG, "RTC_PERIPH: %s", option_str[s_config.pd_options[ESP_PD_DOMAIN_RTC_PERIPH]]);
 #if SOC_RTC_SLOW_MEM_SUPPORTED
-    ESP_LOGD(TAG, "RTC_SLOW_MEM: %s", option_str[s_config.pd_options[ESP_PD_DOMAIN_RTC_SLOW_MEM]]);
+    ESP_EARLY_LOGD(TAG, "RTC_SLOW_MEM: %s", option_str[s_config.pd_options[ESP_PD_DOMAIN_RTC_SLOW_MEM]]);
 #endif
-    ESP_LOGD(TAG, "RTC_FAST_MEM: %s", option_str[s_config.pd_options[ESP_PD_DOMAIN_RTC_FAST_MEM]]);
+    ESP_EARLY_LOGD(TAG, "RTC_FAST_MEM: %s", option_str[s_config.pd_options[ESP_PD_DOMAIN_RTC_FAST_MEM]]);
 
     // Prepare flags based on the selected options
     uint32_t pd_flags = 0;
@@ -1338,10 +1350,12 @@ static uint32_t get_power_down_flags(void)
         pd_flags |= RTC_SLEEP_PD_CPU;
     }
 #endif
-
-#ifdef CONFIG_IDF_TARGET_ESP32
-    pd_flags |= RTC_SLEEP_PD_XTAL;
-#endif
+    if (s_config.pd_options[ESP_PD_DOMAIN_RTC8M] != ESP_PD_OPTION_ON) {
+        pd_flags |= RTC_SLEEP_PD_INT_8M;
+    }
+    if (s_config.pd_options[ESP_PD_DOMAIN_XTAL] != ESP_PD_OPTION_ON) {
+        pd_flags |= RTC_SLEEP_PD_XTAL;
+    }
 
     /**
      * VDD_SDIO power domain shall be kept on during the light sleep
