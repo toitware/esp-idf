@@ -1136,7 +1136,13 @@ static int uart_tx(uart_port_t uart_num, bool write_all, const char *src, size_t
         size_t max_size = xRingbufferGetMaxItemSize(p_uart_obj[uart_num]->tx_ring_buf);
         if(!write_all) {
             size_t max_free = xRingbufferGetCurFreeSize(p_uart_obj[uart_num]->tx_ring_buf);
+            if(max_free < sizeof(uart_tx_data_t)) {
+                xSemaphoreGive(p_uart_obj[uart_num]->tx_mux);
+                return 0;  // Not even enough space to send the control structure.
+            }
+            max_free -= sizeof(uart_tx_data_t);
             max_size = max_size < max_free ? max_size : max_free;
+            size = size > max_size ? max_size : size;
         }
         int offset = 0;
         uart_tx_data_t evt;
@@ -1154,9 +1160,6 @@ static int uart_tx(uart_port_t uart_num, bool write_all, const char *src, size_t
             size -= send_size;
             offset += send_size;
             uart_enable_tx_intr(uart_num, 1, UART_EMPTY_THRESH_DEFAULT);
-            if (!write_all) {
-                break;
-            }
         }
     } else {
         while (size) {
