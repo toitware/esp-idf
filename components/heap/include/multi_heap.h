@@ -179,6 +179,8 @@ typedef struct {
     size_t allocated_blocks;      ///<  Number of (variable size) blocks allocated in the heap.
     size_t free_blocks;           ///<  Number of (variable size) free blocks in the heap.
     size_t total_blocks;          ///<  Total number of (variable size) blocks in the heap.
+    void*  lowest_address;        ///<  The lowest possible address that can be returned by an allocation in the heap.
+    void*  highest_address;       ///<  The highest possible address that can be returned by an allocation in the heap.
 } multi_heap_info_t;
 
 /** @brief Return metadata about a given heap

@@ -579,6 +579,17 @@ void heap_caps_get_info( multi_heap_info_t *info, uint32_t caps )
             info->allocated_blocks += hinfo.allocated_blocks;
             info->free_blocks += hinfo.free_blocks;
             info->total_blocks += hinfo.total_blocks;
+            if (info->lowest_address == NULL) {
+                info->lowest_address = hinfo.lowest_address;
+                info->highest_address = hinfo.highest_address;
+            } else {
+                if ((char*)info->lowest_address > (char*)hinfo.lowest_address) {
+                    info->lowest_address = hinfo.lowest_address;
+                }
+                if ((char*)info->highest_address < (char*)hinfo.highest_address) {
+                   info->highest_address = hinfo.highest_address;
+                }
+            }
         }
     }
 }
