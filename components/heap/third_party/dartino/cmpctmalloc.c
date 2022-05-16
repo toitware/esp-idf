@@ -312,6 +312,7 @@ struct multi_heap_info {
     // For page allocator, not originally part of cmpctmalloc.
     int32_t number_of_pages;
     char *page_base;
+    void *highest_address;
     Page pages[1];
 };
 
@@ -1249,6 +1250,8 @@ cmpct_heap_t *cmpct_register_impl(void *start, size_t size)
     page_heap->pages[pages].status = PAGE_IN_USE;
     page_heap->pages[pages].tag = NULL;
 
+    page_heap->highest_address = (void *)end_int;
+
     cmpct_init(page_heap);
 
     uintptr_t rest_of_zeroth_page = ROUND_UP(end_of_struct, sizeof(header_t));
@@ -1612,6 +1615,10 @@ void cmpct_get_info_impl(cmpct_heap_t *heap, multi_heap_info_t *info)
         }
     }
     info->total_blocks = info->free_blocks + info->allocated_blocks;
+    // The implementation always takes the first part of its area for admin, so
+    // it can never return an address that is lower than the end of that.
+    info->lowest_address = (void *)(heap + 1);  // Use C pointer arithmetic.
+    info->highest_address = heap->highest_address;
     unlock(heap);
 }
 
