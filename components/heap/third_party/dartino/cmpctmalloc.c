@@ -689,6 +689,7 @@ static void cmpct_test_get_info(cmpct_heap_t *heap)
     multi_heap_info_t info;
     cmpct_get_info_impl(heap, &info);
     size_t free_bytes_1 = info.total_free_bytes;
+    size_t allocated_bytes_1 = info.total_allocated_bytes;
 
     size_t SIZE = 1024 * 16;
 
@@ -696,9 +697,10 @@ static void cmpct_test_get_info(cmpct_heap_t *heap)
 
     cmpct_get_info_impl(heap, &info);
     size_t free_bytes_2 = info.total_free_bytes;
-
+    size_t allocated_bytes_2 = info.total_allocated_bytes;
 
     ASSERT(free_bytes_2 + SIZE == free_bytes_1);
+    ASSERT(allocated_bytes_2 - SIZE == allocated_bytes_1);
     cmpct_free_impl(heap, p);
 }
 
@@ -1576,7 +1578,6 @@ void cmpct_get_info_impl(cmpct_heap_t *heap, multi_heap_info_t *info)
             } else {
                 ASSERT(current_status == PAGE_CONTINUED);
                 if (current_tag != heap) {  // Pages used for the sub-page allocator are self-tagged.
-                    info->total_allocated_bytes += current_page_run;
                     if (current_page_run != 0) info->allocated_blocks++;
                 }
             }
