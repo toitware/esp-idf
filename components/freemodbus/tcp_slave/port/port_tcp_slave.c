@@ -13,26 +13,34 @@
  * limitations under the License.
 */
 /*
-  * FreeModbus Libary: ESP32 TCP Port
-  * Copyright (C) 2006 Christian Walter <wolti@sil.at>
-  * Parts of crt0.S Copyright (c) 1995, 1996, 1998 Cygnus Support
-  *
-  * This library is free software; you can redistribute it and/or
-  * modify it under the terms of the GNU Lesser General Public
-  * License as published by the Free Software Foundation; either
-  * version 2.1 of the License, or (at your option) any later version.
-  *
-  * This library is distributed in the hope that it will be useful,
-  * but WITHOUT ANY WARRANTY; without even the implied warranty of
-  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-  * Lesser General Public License for more details.
-  *
-  * You should have received a copy of the GNU Lesser General Public
-  * License along with this library; if not, write to the Free Software
-  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
-  *
-  * File: $Id: port.h,v 1.2 2006/09/04 14:39:20 wolti Exp $
-  */
+ * FreeModbus Libary: ESP32 TCP Port
+ * Copyright (C) 2006 Christian Walter <wolti@sil.at>
+ * Parts of crt0.S Copyright (c) 1995, 1996, 1998 Cygnus Support
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *   notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *   notice, this list of conditions and the following disclaimer in the
+ *   documentation and/or other materials provided with the distribution.
+ * 3. The name of the author may not be used to endorse or promote products
+ *   derived from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * IF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ *
+ * File: $Id: port.c,v 1.2 2006/09/04 14:39:20 wolti Exp $
+ */
 
 /* ----------------------- System includes ----------------------------------*/
 #include <stdio.h>
@@ -60,13 +68,13 @@
 /* ----------------------- Defines  -----------------------------------------*/
 #define MB_TCP_DISCONNECT_TIMEOUT       ( CONFIG_FMB_TCP_CONNECTION_TOUT_SEC * 1000000 ) // disconnect timeout in uS
 #define MB_TCP_RESP_TIMEOUT_MS          ( MB_MASTER_TIMEOUT_MS_RESPOND - 2 ) // slave response time limit
-#define MB_TCP_SLAVE_PORT_TAG           "MB_TCP_SLAVE_PORT"
 #define MB_TCP_NET_LISTEN_BACKLOG       ( SOMAXCONN )
 
 /* ----------------------- Prototypes ---------------------------------------*/
 void vMBPortEventClose( void );
 
 /* ----------------------- Static variables ---------------------------------*/
+static const char *TAG = "MB_TCP_SLAVE_PORT";
 static int xListenSock = -1;
 static MbSlavePortConfig_t xConfig = { 0 };
 
@@ -128,14 +136,14 @@ xMBTCPPortInit( USHORT usTCPPort )
 
     xConfig.pxMbClientInfo = calloc(MB_TCP_PORT_MAX_CONN + 1, sizeof(MbClientInfo_t*));
     if (!xConfig.pxMbClientInfo) {
-        ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "TCP client info allocation failure.");
+        ESP_LOGE(TAG, "TCP client info allocation failure.");
         return FALSE;
     }
     for(int idx = 0; idx < MB_TCP_PORT_MAX_CONN; xConfig.pxMbClientInfo[idx] = NULL, idx++);
 
     xConfig.xRespQueueHandle = xMBTCPPortRespQueueCreate();
     if (!xConfig.xRespQueueHandle) {
-        ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Response queue allocation failure.");
+        ESP_LOGE(TAG, "Response queue allocation failure.");
         return FALSE;
     }
 
@@ -156,10 +164,10 @@ xMBTCPPortInit( USHORT usTCPPort )
     vTaskSuspend(xConfig.xMbTcpTaskHandle);
     if (xErr != pdTRUE)
     {
-        ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Server task creation failure.");
+        ESP_LOGE(TAG, "Server task creation failure.");
         vTaskDelete(xConfig.xMbTcpTaskHandle);
     } else {
-        ESP_LOGI(MB_TCP_SLAVE_PORT_TAG, "Protocol stack initialized.");
+        ESP_LOGI(TAG, "Protocol stack initialized.");
         bOkay = TRUE;
     }
     return bOkay;
@@ -172,11 +180,6 @@ void vMBTCPPortSlaveSetNetOpt(void* pvNetIf, eMBPortIpVer xIpVersion, eMBPortPro
     xConfig.eMbProto = xProto;
     xConfig.xIpVer = xIpVersion;
     xConfig.pcBindAddr = pcBindAddrStr;
-}
-
-void vMBTCPPortSlaveStartServerTask(void)
-{
-    vTaskResume(xConfig.xMbTcpTaskHandle);
 }
 
 static int xMBTCPPortAcceptConnection(int xListenSockId, char** pcIPAddr)
@@ -194,7 +197,7 @@ static int xMBTCPPortAcceptConnection(int xListenSockId, char** pcIPAddr)
     // Accept new socket connection if not active
     xSockId = accept(xListenSockId, (struct sockaddr *)&xSrcAddr, &xSize);
     if (xSockId < 0) {
-        ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Unable to accept connection: errno=%d", errno);
+        ESP_LOGE(TAG, "Unable to accept connection: errno=%d", errno);
         close(xSockId);
     } else {
         // Get the sender's ip address as string
@@ -206,7 +209,7 @@ static int xMBTCPPortAcceptConnection(int xListenSockId, char** pcIPAddr)
             inet6_ntoa_r(((struct sockaddr_in6 *)&xSrcAddr)->sin6_addr, cAddrStr, sizeof(cAddrStr) - 1);
         }
 #endif
-        ESP_LOGI(MB_TCP_SLAVE_PORT_TAG, "Socket (#%d), accept client connection from address: %s", xSockId, cAddrStr);
+        ESP_LOGI(TAG, "Socket (#%d), accept client connection from address: %s", xSockId, cAddrStr);
         pcStr = calloc(1, strlen(cAddrStr) + 1);
         if (pcStr && pcIPAddr) {
             memcpy(pcStr, cAddrStr, strlen(cAddrStr));
@@ -222,11 +225,11 @@ static BOOL xMBTCPPortCloseConnection(MbClientInfo_t* pxInfo)
     MB_PORT_CHECK(pxInfo, FALSE, "Client info is NULL.");
 
     if (pxInfo->xSockId == -1) {
-        ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Wrong socket info or disconnected socket: %d.", pxInfo->xSockId);
+        ESP_LOGE(TAG, "Wrong socket info or disconnected socket: %d.", pxInfo->xSockId);
         return FALSE;
     }
     if (shutdown(pxInfo->xSockId, SHUT_RDWR) == -1) {
-        ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Socket (#%d), shutdown failed: errno %d", pxInfo->xSockId, errno);
+        ESP_LOGE(TAG, "Socket (#%d), shutdown failed: errno %d", pxInfo->xSockId, errno);
     }
     close(pxInfo->xSockId);
     pxInfo->xSockId = -1;
@@ -263,7 +266,7 @@ static int xMBTCPPortRxPoll(MbClientInfo_t* pxClientInfo, ULONG xTimeoutMs)
             } else if (xRet == 0) {
                 // timeout occurred
                 if ((xStartTimeStamp + xTimeoutMs * 1000) > xMBTCPGetTimeStamp()) {
-                    ESP_LOGD(MB_TCP_SLAVE_PORT_TAG, "Socket (#%d) Read timeout.", pxClientInfo->xSockId);
+                    ESP_LOGD(TAG, "Socket (#%d) Read timeout.", pxClientInfo->xSockId);
                     xRet = ERR_TIMEOUT;
                     break;
                 }
@@ -278,12 +281,12 @@ static int xMBTCPPortRxPoll(MbClientInfo_t* pxClientInfo, ULONG xTimeoutMs)
                                       pxClientInfo->usTCPFrameBytesLeft, MSG_DONTWAIT);
                 if (xLength < 0) {
                     // If an error occurred during receiving
-                    ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Receive failed: length=%d, errno=%d", xLength, errno);
+                    ESP_LOGE(TAG, "Receive failed: length=%d, errno=%d", xLength, errno);
                     xRet = (err_t)xLength;
                     break;
                 } else if (xLength == 0) {
                     // Socket connection closed
-                    ESP_LOGD(MB_TCP_SLAVE_PORT_TAG, "Socket (#%d)(%s), connection closed.",
+                    ESP_LOGD(TAG, "Socket (#%d)(%s), connection closed.",
                                                         pxClientInfo->xSockId, pxClientInfo->pcIpAddr);
                     xRet = ERR_CLSD;
                     break;
@@ -301,14 +304,14 @@ static int xMBTCPPortRxPoll(MbClientInfo_t* pxClientInfo, ULONG xTimeoutMs)
                             pxClientInfo->usTCPFrameBytesLeft = xLength + MB_TCP_UID - pxClientInfo->usTCPBufPos;
                         } else if (pxClientInfo->usTCPBufPos == (MB_TCP_UID + xLength)) {
 #if MB_TCP_DEBUG
-                            prvvMBTCPLogFrame(MB_TCP_SLAVE_PORT_TAG, (UCHAR*)&pxClientInfo->pucTCPBuf[0], pxClientInfo->usTCPBufPos);
+                            prvvMBTCPLogFrame(TAG, (UCHAR*)&pxClientInfo->pucTCPBuf[0], pxClientInfo->usTCPBufPos);
 #endif
                             // Copy TID field from incoming packet
                             pxClientInfo->usTidCnt = MB_TCP_GET_FIELD(pxClientInfo->pucTCPBuf, MB_TCP_TID);
                             xRet = pxClientInfo->usTCPBufPos;
                             break;
                         } else if ((pxClientInfo->usTCPBufPos + xLength) >= MB_TCP_BUF_SIZE) {
-                            ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Incorrect buffer received (%u) bytes.", xLength);
+                            ESP_LOGE(TAG, "Incorrect buffer received (%u) bytes.", xLength);
                             // This should not happen. We can't deal with such a client and
                             // drop the connection for security reasons.
                             xRet = ERR_BUF;
@@ -393,7 +396,7 @@ vMBTCPPortBindAddr(const CHAR* pcBindIp)
         {
             if (listen(xListenSockFd, MB_TCP_NET_LISTEN_BACKLOG) != 0)
             {
-                ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Error occurred during listen: errno=%d", errno);
+                ESP_LOGE(TAG, "Error occurred during listen: errno=%d", errno);
                 close(xListenSockFd);
                 xListenSockFd = -1;
                 continue;
@@ -401,7 +404,7 @@ vMBTCPPortBindAddr(const CHAR* pcBindIp)
         }
         // Bind was successful
         pcStr = (pxCurAddr->ai_canonname == NULL) ? (CHAR*)"\0" : pxCurAddr->ai_canonname;
-        ESP_LOGI(MB_TCP_SLAVE_PORT_TAG, "Socket (#%d), listener %s on port: %d, errno=%d",
+        ESP_LOGI(TAG, "Socket (#%d), listener %s on port: %d, errno=%d",
                                             xListenSockFd, pcStr, xConfig.usPort, errno);
         break;
     }
@@ -467,11 +470,11 @@ static void vMBTCPPortServerTask(void *pvParameters)
             xErr = select(xMaxSd + 1 , &xReadSet , NULL , NULL , NULL);
             if ((xErr < 0) && (errno != EINTR)) {
                 // error occurred during wait for read
-                ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "select() errno = %d.", errno);
+                ESP_LOGE(TAG, "select() errno = %d.", errno);
                 continue;
             } else if (xErr == 0) {
                 // If timeout happened, something is wrong
-                ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "select() timeout, errno = %d.", errno);
+                ESP_LOGE(TAG, "select() timeout, errno = %d.", errno);
             }
 
             // If something happened on the master socket, then its an incoming connection.
@@ -487,21 +490,21 @@ static void vMBTCPPortServerTask(void *pvParameters)
                 // if request for new connection but no space left
                 if (pxClientInfo != NULL) {
                     if (xConfig.pxMbClientInfo[MB_TCP_PORT_MAX_CONN] == NULL) {
-                        ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Fail to accept connection %d, only %d connections supported.", i + 1, MB_TCP_PORT_MAX_CONN);
+                        ESP_LOGE(TAG, "Fail to accept connection %d, only %d connections supported.", i + 1, MB_TCP_PORT_MAX_CONN);
                     }
                     xConfig.pxMbClientInfo[MB_TCP_PORT_MAX_CONN] = pxClientInfo; // set last connection info
                 } else {
                     // allocate memory for new client info
                     pxClientInfo = calloc(1, sizeof(MbClientInfo_t));
                     if (!pxClientInfo) {
-                        ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Client info allocation fail.");
+                        ESP_LOGE(TAG, "Client info allocation fail.");
                         vMBTCPPortFreeClientInfo(pxClientInfo);
                         pxClientInfo = NULL;
                     } else {
                         // Accept new client connection
                         pxClientInfo->xSockId = xMBTCPPortAcceptConnection(xListenSock, &pcClientIp);
                         if (pxClientInfo->xSockId < 0) {
-                            ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Fail to accept connection for client %d.", (xConfig.usClientCount - 1));
+                            ESP_LOGE(TAG, "Fail to accept connection for client %d.", (xConfig.usClientCount - 1));
                             // Accept connection fail, then free client info and continue polling.
                             vMBTCPPortFreeClientInfo(pxClientInfo);
                             pxClientInfo = NULL;
@@ -509,7 +512,7 @@ static void vMBTCPPortServerTask(void *pvParameters)
                         }
                         pxClientInfo->pucTCPBuf = calloc(MB_TCP_BUF_SIZE, sizeof(UCHAR));
                         if (!pxClientInfo->pucTCPBuf) {
-                            ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Fail to allocate buffer for client %d.", (xConfig.usClientCount - 1));
+                            ESP_LOGE(TAG, "Fail to allocate buffer for client %d.", (xConfig.usClientCount - 1));
                             vMBTCPPortFreeClientInfo(pxClientInfo);
                             pxClientInfo = NULL;
                             continue;
@@ -543,17 +546,17 @@ static void vMBTCPPortServerTask(void *pvParameters)
                                 switch(xErr)
                                 {
                                     case ERR_TIMEOUT:
-                                        ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Socket (#%d)(%s), data receive timeout, time[us]: %d, close active connection.",
+                                        ESP_LOGE(TAG, "Socket (#%d)(%s), data receive timeout, time[us]: %d, close active connection.",
                                                                             pxClientInfo->xSockId, pxClientInfo->pcIpAddr,
                                                                             (int)(xTimeStamp - pxClientInfo->xRecvTimeStamp));
                                         break;
                                     case ERR_CLSD:
-                                        ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Socket (#%d)(%s), connection closed by peer.",
+                                        ESP_LOGE(TAG, "Socket (#%d)(%s), connection closed by peer.",
                                                                             pxClientInfo->xSockId, pxClientInfo->pcIpAddr);
                                         break;
                                     case ERR_BUF:
                                     default:
-                                        ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Socket (#%d)(%s), read data error: %d",
+                                        ESP_LOGE(TAG, "Socket (#%d)(%s), read data error: %d",
                                                                             pxClientInfo->xSockId, pxClientInfo->pcIpAddr, xErr);
                                         break;
                                 }
@@ -578,26 +581,26 @@ static void vMBTCPPortServerTask(void *pvParameters)
                                 // Complete frame received, inform state machine to process frame
                                 xMBPortEventPost(EV_FRAME_RECEIVED);
 
-                                ESP_LOGD(MB_TCP_SLAVE_PORT_TAG, "Socket (#%d)(%s), get packet TID=0x%X, %d bytes.",
+                                ESP_LOGD(TAG, "Socket (#%d)(%s), get packet TID=0x%X, %d bytes.",
                                                                     pxClientInfo->xSockId, pxClientInfo->pcIpAddr,
                                                                     pxClientInfo->usTidCnt, xErr);
 
                                 // Wait while response is not processed by stack by timeout
                                 UCHAR* pucSentBuffer = vxMBTCPPortRespQueueRecv(xConfig.xRespQueueHandle);
                                 if (pucSentBuffer == NULL) {
-                                    ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Response time exceeds configured %d [ms], ignore packet.",
+                                    ESP_LOGE(TAG, "Response time exceeds configured %d [ms], ignore packet.",
                                                                         MB_TCP_RESP_TIMEOUT_MS);
                                 } else  {
                                     USHORT usSentTid = MB_TCP_GET_FIELD(pucSentBuffer, MB_TCP_TID);
                                     if (usSentTid != pxClientInfo->usTidCnt) {
-                                        ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Sent TID(%x) != Recv TID(%x), ignore packet.",
+                                        ESP_LOGE(TAG, "Sent TID(%x) != Recv TID(%x), ignore packet.",
                                                                             usSentTid, pxClientInfo->usTidCnt);
                                     }
                                 }
 
                                 // Get time stamp of last data update
                                 pxClientInfo->xSendTimeStamp = xMBTCPGetTimeStamp();
-                                ESP_LOGD(MB_TCP_SLAVE_PORT_TAG, "Client %d, Socket(#%d), processing time = %d (us).",
+                                ESP_LOGD(TAG, "Client %d, Socket(#%d), processing time = %d (us).",
                                                             pxClientInfo->xIndex, pxClientInfo->xSockId,
                                                             (int)(pxClientInfo->xSendTimeStamp - pxClientInfo->xRecvTimeStamp));
                             }
@@ -606,7 +609,7 @@ static void vMBTCPPortServerTask(void *pvParameters)
                                 // client is not ready to be read
                                 int64_t xTime = xMBTCPGetTimeStamp() - pxClientInfo->xRecvTimeStamp;
                                 if (xTime > MB_TCP_DISCONNECT_TIMEOUT) {
-                                    ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Client %d, Socket(#%d) do not answer for %d (us). Drop connection...",
+                                    ESP_LOGE(TAG, "Client %d, Socket(#%d) do not answer for %d (us). Drop connection...",
                                                                     pxClientInfo->xIndex, pxClientInfo->xSockId, (int)(xTime));
                                     xMBTCPPortCloseConnection(pxClientInfo);
 
@@ -615,7 +618,7 @@ static void vMBTCPPortServerTask(void *pvParameters)
                                     xConfig.pxMbClientInfo[i] = NULL;
                                 }
                             } else {
-                                ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Client %d is disconnected.", i);
+                                ESP_LOGE(TAG, "Client %d is disconnected.", i);
                             }
                         }
                     } // if ((pxClientInfo != NULL)
@@ -634,6 +637,11 @@ vMBTCPPortClose( )
     vTaskDelete(xConfig.xMbTcpTaskHandle);
 }
 
+void vMBTCPPortEnable( void )
+{
+    vTaskResume(xConfig.xMbTcpTaskHandle);
+}
+
 void
 vMBTCPPortDisable( void )
 {
@@ -646,6 +654,7 @@ vMBTCPPortDisable( void )
             xConfig.pxMbClientInfo[i] = NULL;
         }
     }
+    free(xConfig.pxMbClientInfo);
     close(xListenSock);
     xListenSock = -1;
     vMBTCPPortRespQueueDelete(xConfig.xRespQueueHandle);
@@ -685,7 +694,7 @@ xMBTCPPortSendResponse( UCHAR * pucMBTCPFrame, USHORT usTCPLength )
         // Check if socket writable
         xErr = select(xConfig.pxCurClientInfo->xSockId + 1, NULL, &xWriteSet, &xErrorSet, &xTimeVal);
         if ((xErr == -1) || FD_ISSET(xConfig.pxCurClientInfo->xSockId, &xErrorSet)) {
-            ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Socket(#%d) , send select() error = %d.",
+            ESP_LOGE(TAG, "Socket(#%d) , send select() error = %d.",
                     xConfig.pxCurClientInfo->xSockId, errno);
             return FALSE;
         }
@@ -697,7 +706,7 @@ xMBTCPPortSendResponse( UCHAR * pucMBTCPFrame, USHORT usTCPLength )
         // Write message into socket and disable Nagle's algorithm
         xErr = send(xConfig.pxCurClientInfo->xSockId, pucMBTCPFrame, usTCPLength, TCP_NODELAY);
         if (xErr < 0) {
-            ESP_LOGE(MB_TCP_SLAVE_PORT_TAG, "Socket(#%d), fail to send data, errno = %d",
+            ESP_LOGE(TAG, "Socket(#%d), fail to send data, errno = %d",
                     xConfig.pxCurClientInfo->xSockId, errno);
             xConfig.pxCurClientInfo->xError = xErr;
         } else {
@@ -705,7 +714,7 @@ xMBTCPPortSendResponse( UCHAR * pucMBTCPFrame, USHORT usTCPLength )
             vxMBTCPPortRespQueueSend(xConfig.xRespQueueHandle, (void*)pucMBTCPFrame);
         }
     } else {
-        ESP_LOGD(MB_TCP_SLAVE_PORT_TAG, "Port is not active. Release lock.");
+        ESP_LOGD(TAG, "Port is not active. Release lock.");
         vxMBTCPPortRespQueueSend(xConfig.xRespQueueHandle, (void*)pucMBTCPFrame);
     }
     return bFrameSent;

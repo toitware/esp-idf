@@ -25,6 +25,7 @@
 #include "esp_log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "esp_efuse.h"
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
@@ -331,8 +332,6 @@ IRAM_ATTR void esp_mac_bb_power_down(void)
 
 const esp_phy_init_data_t* esp_phy_get_init_data(void)
 {
-    esp_err_t err = ESP_OK;
-    const esp_partition_t* partition = NULL;
 #if CONFIG_ESP32_MULTIPLE_PHY_DATA_BIN_EMBEDDED
     size_t init_data_store_length = sizeof(phy_init_magic_pre) +
             sizeof(esp_phy_init_data_t) + sizeof(phy_init_magic_post);
@@ -344,7 +343,7 @@ const esp_phy_init_data_t* esp_phy_get_init_data(void)
     memcpy(init_data_store, multi_phy_init_data_bin_start, init_data_store_length);
     ESP_LOGI(TAG, "loading embedded multiple PHY init data");
 #else
-    partition = esp_partition_find_first(
+    const esp_partition_t* partition = esp_partition_find_first(
             ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_PHY, NULL);
     if (partition == NULL) {
         ESP_LOGE(TAG, "PHY data partition not found");
@@ -358,7 +357,7 @@ const esp_phy_init_data_t* esp_phy_get_init_data(void)
         ESP_LOGE(TAG, "failed to allocate memory for PHY init data");
         return NULL;
     }
-    err = esp_partition_read(partition, 0, init_data_store, init_data_store_length);
+    esp_err_t err = esp_partition_read(partition, 0, init_data_store, init_data_store_length);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "failed to read PHY data partition (0x%x)", err);
         free(init_data_store);
@@ -576,6 +575,10 @@ void esp_phy_load_cal_and_init(void)
 {
     char * phy_version = get_phy_version_str();
     ESP_LOGI(TAG, "phy_version %s", phy_version);
+
+#if CONFIG_IDF_TARGET_ESP32S2
+    phy_eco_version_sel(esp_efuse_get_chip_ver());
+#endif
 
     esp_phy_calibration_data_t* cal_data =
             (esp_phy_calibration_data_t*) calloc(sizeof(esp_phy_calibration_data_t), 1);

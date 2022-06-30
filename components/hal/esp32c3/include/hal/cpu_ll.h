@@ -16,10 +16,13 @@
 #include <stdint.h>
 
 #include "soc/soc_caps.h"
+#include "soc/dport_access.h"
+#include "soc/system_reg.h"
 #include "esp_bit_defs.h"
 #include "soc/assist_debug_reg.h"
 #include "esp_attr.h"
 #include "riscv/csr.h"
+#include "riscv/semihosting.h"
 
 /*performance counter*/
 #define CSR_PCER_MACHINE    0x7e0
@@ -72,8 +75,29 @@ static inline void cpu_ll_init_hwloop(void)
     // Nothing needed here for ESP32-C3
 }
 
+static inline bool cpu_ll_is_debugger_attached(void)
+{
+    return REG_GET_BIT(ASSIST_DEBUG_C0RE_0_DEBUG_MODE_REG, ASSIST_DEBUG_CORE_0_DEBUG_MODULE_ACTIVE);
+}
+
 static inline void cpu_ll_set_breakpoint(int id, uint32_t pc)
 {
+    if (cpu_ll_is_debugger_attached()) {
+        /* If we want to set breakpoint which when hit transfers control to debugger
+         * we need to set `action` in `mcontrol` to 1 (Enter Debug Mode).
+         * That `action` value is supported only when `dmode` of `tdata1` is set.
+         * But `dmode` can be modified by debugger only (from Debug Mode).
+         *
+         * So when debugger is connected we use special syscall to ask it to set breakpoint for us.
+         */
+        long args[] = {true, id, (long)pc};
+        int ret = semihosting_call_noerrno(ESP_SEMIHOSTING_SYS_BREAKPOINT_SET, args);
+        if (ret == 0) {
+            return;
+        }
+    }
+    /* The code bellow sets breakpoint which will trigger `Breakpoint` exception
+     * instead transfering control to debugger. */
     RV_WRITE_CSR(tselect,id);
     RV_SET_CSR(CSR_TCONTROL,TCONTROL_MTE);
     RV_SET_CSR(CSR_TDATA1, TDATA1_USER|TDATA1_MACHINE|TDATA1_EXECUTE);
@@ -83,6 +107,14 @@ static inline void cpu_ll_set_breakpoint(int id, uint32_t pc)
 
 static inline void cpu_ll_clear_breakpoint(int id)
 {
+    if (cpu_ll_is_debugger_attached()) {
+        /* see description in cpu_ll_set_breakpoint()  */
+        long args[] = {false, id};
+        int ret = semihosting_call_noerrno(ESP_SEMIHOSTING_SYS_BREAKPOINT_SET, args);
+        if (ret == 0){
+            return;
+        }
+    }
     RV_WRITE_CSR(tselect,id);
     RV_CLEAR_CSR(CSR_TCONTROL,TCONTROL_MTE);
     RV_CLEAR_CSR(CSR_TDATA1, TDATA1_USER|TDATA1_MACHINE|TDATA1_EXECUTE);
@@ -106,6 +138,17 @@ static inline void cpu_ll_set_watchpoint(int id,
                                         bool on_write)
 {
     uint32_t addr_napot;
+
+    if (cpu_ll_is_debugger_attached()) {
+        /* see description in cpu_ll_set_breakpoint()  */
+        long args[] = {true, id, (long)addr, (long)size,
+            (long)((on_read ? ESP_SEMIHOSTING_WP_FLG_RD : 0) | (on_write ? ESP_SEMIHOSTING_WP_FLG_WR : 0))};
+        int ret = semihosting_call_noerrno(ESP_SEMIHOSTING_SYS_WATCHPOINT_SET, args);
+        if (ret == 0) {
+            return;
+        }
+    }
+
     RV_WRITE_CSR(tselect,id);
     RV_SET_CSR(CSR_TCONTROL, TCONTROL_MPTE | TCONTROL_MTE);
     RV_SET_CSR(CSR_TDATA1, TDATA1_USER|TDATA1_MACHINE);
@@ -124,6 +167,14 @@ static inline void cpu_ll_set_watchpoint(int id,
 
 static inline void cpu_ll_clear_watchpoint(int id)
 {
+    if (cpu_ll_is_debugger_attached()) {
+        /* see description in cpu_ll_set_breakpoint()  */
+        long args[] = {false, id};
+        int ret = semihosting_call_noerrno(ESP_SEMIHOSTING_SYS_WATCHPOINT_SET, args);
+        if (ret == 0){
+            return;
+        }
+    }
     RV_WRITE_CSR(tselect,id);
     RV_CLEAR_CSR(CSR_TCONTROL,TCONTROL_MTE);
     RV_CLEAR_CSR(CSR_TDATA1, TDATA1_USER|TDATA1_MACHINE);
@@ -131,11 +182,6 @@ static inline void cpu_ll_clear_watchpoint(int id)
     RV_CLEAR_CSR(CSR_TDATA1, TDATA1_MACHINE);
     RV_CLEAR_CSR(CSR_TDATA1, TDATA1_LOAD|TDATA1_STORE|TDATA1_EXECUTE);
     return;
-}
-
-FORCE_INLINE_ATTR bool cpu_ll_is_debugger_attached(void)
-{
-    return REG_GET_BIT(ASSIST_DEBUG_C0RE_0_DEBUG_MODE_REG, ASSIST_DEBUG_CORE_0_DEBUG_MODULE_ACTIVE);
 }
 
 static inline void cpu_ll_break(void)
@@ -153,6 +199,11 @@ static inline void cpu_ll_set_vecbase(const void* vecbase)
 
 static inline void cpu_ll_waiti(void)
 {
+    if (cpu_ll_is_debugger_attached() && DPORT_REG_GET_BIT(SYSTEM_CPU_PER_CONF_REG, SYSTEM_CPU_WAIT_MODE_FORCE_ON) == 0) {
+        /* when SYSTEM_CPU_WAIT_MODE_FORCE_ON is disabled in WFI mode SBA access to memory does not work for debugger,
+           so do not enter that mode when debugger is connected */
+        return;
+    }
     asm volatile ("wfi\n");
 }
 

@@ -19,6 +19,7 @@
 #define SOC_DIG_SIGN_SUPPORTED          1
 #define SOC_HMAC_SUPPORTED              1
 #define SOC_ASYNC_MEMCPY_SUPPORTED      1
+#define SOC_PSRAM_DMA_CAPABLE           1
 #define SOC_EFUSE_SECURE_BOOT_KEY_DIGESTS 3
 
 /*-------------------------- ADC CAPS ----------------------------------------*/
@@ -107,6 +108,7 @@
 
 #define SOC_UART_SUPPORT_RTC_CLK    (1)     /*!< Support RTC clock as the clock source */
 #define SOC_UART_SUPPORT_XTAL_CLK   (1)     /*!< Support XTAL clock as the clock source */
+#define SOC_UART_REQUIRE_CORE_RESET (1)
 
 /*--------------------------- SHA CAPS ---------------------------------------*/
 /* Max amount of bytes in a single DMA operation is 4095,

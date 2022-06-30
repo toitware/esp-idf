@@ -5,7 +5,6 @@ set(srcs "port/os_xtensa.c"
     "src/ap/wpa_auth_ie.c"
     "src/common/sae.c"
     "src/common/wpa_common.c"
-    "src/common/dpp.c"
     "src/utils/bitfield.c"
     "src/crypto/aes-siv.c"
     "src/crypto/sha256-kdf.c"
@@ -37,6 +36,9 @@ set(srcs "port/os_xtensa.c"
     "src/esp_supplicant/esp_wps.c"
     "src/esp_supplicant/esp_wpa3.c"
     "src/esp_supplicant/esp_dpp.c"
+    "src/eap_peer/eap_fast.c"
+    "src/eap_peer/eap_fast_common.c"
+    "src/eap_peer/eap_fast_pac.c"
     "src/rsn_supp/pmksa_cache.c"
     "src/rsn_supp/wpa.c"
     "src/rsn_supp/wpa_ie.c"
@@ -134,6 +136,7 @@ else()
     "src/crypto/sha1-internal.c"
     "src/crypto/sha1-pbkdf2.c"
     "src/crypto/sha1.c"
+    "src/crypto/sha1-tprf.c"
     "src/crypto/sha256-internal.c"
     "src/crypto/sha384-internal.c"
     "src/crypto/sha512-internal.c"
@@ -154,7 +157,14 @@ else()
     set(roaming_src "")
 endif()
 
-idf_component_register(SRCS "${srcs}" "${tls_src}" "${roaming_src}" "${crypto_src}"
+if(CONFIG_WPA_DPP_SUPPORT)
+    set(dpp_src "src/common/dpp.c"
+    "src/esp_supplicant/esp_dpp.c")
+else()
+    set(dpp_src "")
+endif()
+
+idf_component_register(SRCS "${srcs}" "${tls_src}" "${roaming_src}" "${crypto_src}" "${dpp_src}"
                     INCLUDE_DIRS include port/include include/esp_supplicant
                     PRIV_INCLUDE_DIRS src src/utils
                     PRIV_REQUIRES mbedtls esp_timer)
@@ -169,6 +179,7 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     EAP_TTLS
     EAP_TLS
     EAP_PEAP
+    EAP_FAST
     USE_WPA2_TASK
     CONFIG_WPS2
     CONFIG_WPS_PIN
@@ -178,7 +189,6 @@ target_compile_definitions(${COMPONENT_LIB} PRIVATE
     CONFIG_ECC
     CONFIG_IEEE80211W
     CONFIG_SHA256
-    CONFIG_DPP
     CONFIG_WNM
     )
 
@@ -188,5 +198,7 @@ endif()
 if(CONFIG_WPA_WPS_STRICT)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_WPS_STRICT)
 endif()
-
+if(CONFIG_WPA_DPP_SUPPORT)
+    target_compile_definitions(${COMPONENT_LIB} PRIVATE CONFIG_DPP)
+endif()
 set_property(TARGET ${COMPONENT_LIB} APPEND PROPERTY LINK_INTERFACE_MULTIPLICITY 3)

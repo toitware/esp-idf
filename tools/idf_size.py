@@ -6,19 +6,8 @@
 # Includes information which is not shown in "xtensa-esp32-elf-size",
 # or easy to parse from "xtensa-esp32-elf-objdump" or raw map files.
 #
-# Copyright 2017-2021 Espressif Systems (Shanghai) CO LTD
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# SPDX-FileCopyrightText: 2017-2022 Espressif Systems (Shanghai) CO LTD
+# SPDX-License-Identifier: Apache-2.0
 #
 from __future__ import division, print_function, unicode_literals
 
@@ -244,11 +233,13 @@ class LinkingSections(object):
             split_name = section.split('.')
             if len(split_name) > 1:
                 # If the section has a memory type, update the type and try to display the type properly
-                assert len(split_name) == 3 and split_name[0] == '', 'Unexpected section name'
+                assert split_name[0] == '', 'Unexpected section name "{}"'.format(section)
                 memory_name = '.iram' if 'iram' in split_name[1] else\
                               '.dram' if 'dram' in split_name[1] else\
                               '.flash' if 'flash' in split_name[1] else\
                               '.' + split_name[1]
+                if len(split_name) < 3:
+                    split_name.append('')   # in order to avoid failures in the following lines
                 display_name_list[i] = 'DRAM .' + split_name[2] if 'dram' in split_name[1] else\
                                        'IRAM' + split_name[1].replace('iram', '') + ' .' + split_name[2] if 'iram' in split_name[1] else\
                                        'Flash .' + split_name[2] if 'flash' in split_name[1] else\
@@ -281,11 +272,10 @@ def load_map_data(map_file):  # type: (TextIO) -> Tuple[str, Dict, Dict]
     detected_chip = detect_target_chip(map_file)
     sections = load_sections(map_file)
 
-    # Exclude the .dummy section, which usually means shared region among I/D buses
-    dummy_keys = [key for key in sections if key.endswith(('.dummy'))]
-    if dummy_keys:
-        sections.pop(*dummy_keys)
-
+    # Exclude the dummy and .text_end section, which usually means shared region among I/D buses
+    for key in list(sections.keys()):
+        if key.endswith(('dummy', '.text_end')):
+            sections.pop(key)
     return detected_chip, segments, sections
 
 
@@ -370,7 +360,10 @@ def load_sections(map_file):  # type: (TextIO) -> Dict
     RE_FULL_LINE = re.compile(r'\s*(?P<sym_name>\S*) +0x(?P<address>[\da-f]+) +0x(?P<size>[\da-f]+)\s*(?P<file>.*)$')
 
     # Extract archive and object_file from the file_info field
-    RE_FILE = re.compile(r'((?P<archive>[^ ]+\.a)?\(?(?P<object_file>[^ ]+\.(o|obj))\)?)')
+    # The object file extention (.obj or .o) is optional including the dot. This is necessary for some third-party
+    # libraries. Since the dot is optional and the search gready the parsing of the object name must stop at ). Hence
+    # the [^ )] part of the regex.
+    RE_FILE = re.compile(r'((?P<archive>[^ ]+\.a)?\(?(?P<object_file>[^ )]+(\.(o|obj))?)\)?)')
 
     def dump_src_line(src):  # type: (Dict) -> str
         return '%s(%s) addr: 0x%08x, size: 0x%x+%d' % (src['sym_name'], src['file'], src['address'], src['size'], src['fill'])
@@ -441,7 +434,7 @@ def load_sections(map_file):  # type: (TextIO) -> Dict
 
             # Extract archive and file information
             n = RE_FILE.match(m.group('file'))
-            assert n
+            assert n, 'Archive and file information not found for "{}"'.format(m.group('file'))
 
             archive = n.group('archive')
             if archive is None:
@@ -622,8 +615,6 @@ class StructureForSummary(object):
         r.dram_total = get_size(dram_filter)
         iram_filter = filter(in_iram, segments)
         r.iram_total = get_size(iram_filter)
-        if r.diram_total == 0:
-            r.diram_total = r.dram_total + r.iram_total
 
         def filter_in_section(sections, section_to_check):  # type: (Iterable[MemRegions.Region], str) -> List[MemRegions.Region]
             return list(filter(lambda x: LinkingSections.in_section(x.section, section_to_check), sections))  # type: ignore
@@ -631,8 +622,6 @@ class StructureForSummary(object):
         dram_sections = list(filter(in_dram, sections))
         iram_sections = list(filter(in_iram, sections))
         diram_sections = list(filter(in_diram, sections))
-        if not diram_sections:
-            diram_sections = dram_sections + iram_sections
         flash_sections = filter_in_section(sections, 'flash')
 
         dram_data_list = filter_in_section(dram_sections, 'data')

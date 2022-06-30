@@ -116,14 +116,13 @@
     - .rules:tests:integration_test
   needs:
     - assign_test
-    - build_ssc_esp32
   variables:
     LOCAL_ENV_CONFIG_PATH: "$CI_PROJECT_DIR/ci-test-runner-configs/$CI_RUNNER_DESCRIPTION/ESP32_IDF"
     LOG_PATH: "${CI_PROJECT_DIR}/TEST_LOGS"
     TEST_CASE_FILE_PATH: "$CI_PROJECT_DIR/auto_test_script/TestCaseFiles"
-    MODULE_UPDATE_FILE: "$CI_PROJECT_DIR/components/idf_test/ModuleDefinition.yml"
-    CONFIG_FILE_PATH: "${CI_PROJECT_DIR}/components/idf_test/integration_test/CIConfigs"
-    KNOWN_ISSUE_FILE: "${CI_PROJECT_DIR}/components/idf_test/integration_test/KnownIssues"
+    INTEGRATION_TEST_DIR: "${CI_PROJECT_DIR}/tools/ci/integration_test"
+    CONFIG_FILE_PATH: "${CI_PROJECT_DIR}/tools/ci/integration_test/test_configs"
+    PREPARE_TEST_BIN_SCRIPT: "${CI_PROJECT_DIR}/tools/ci/integration_test/prepare_test_bins.py"
     CI_RUNNER_SCRIPT: "${CI_PROJECT_DIR}/auto_test_script/bin/CIRunner.py"
     PYTHONPATH: ${CI_PROJECT_DIR}/auto_test_script/packages
     # auto_test_script only supports python 3.7.x
@@ -140,9 +139,16 @@
     - retry_failed git clone ${CI_AUTO_TEST_SCRIPT_REPO_URL} -b empty_branch
     - retry_failed git -C auto_test_script checkout -f ${CI_AUTO_TEST_SCRIPT_REPO_BRANCH}
     - python $CHECKOUT_REF_SCRIPT auto_test_script auto_test_script --customized_only
-    - cat ${KNOWN_ISSUE_FILE} >> ${TEST_CASE_FILE_PATH}/KnownIssues
+    - cat ${INTEGRATION_TEST_DIR}/KnownIssues >> ${TEST_CASE_FILE_PATH}/KnownIssues
     # run test
+    - python ${PREPARE_TEST_BIN_SCRIPT} $CONFIG_FILE
     - python ${CI_RUNNER_SCRIPT} -l "$LOG_PATH/$JOB_FULL_NAME" -c $CONFIG_FILE -e $LOCAL_ENV_CONFIG_PATH -t $TEST_CASE_FILE_PATH
+
+.integration_test_esp32c3_template:
+  extends:
+    - .integration_test_template
+  variables:
+    LOCAL_ENV_CONFIG_PATH: "$CI_PROJECT_DIR/ci-test-runner-configs/$CI_RUNNER_DESCRIPTION/ESP32C3_IDF"
 
 test_weekend_mqtt:
   extends:
@@ -357,7 +363,7 @@ component_ut_test_001:
 
 UT_001:
   extends: .unit_test_32_template
-  parallel: 49
+  parallel: 50
   tags:
     - ESP32_IDF
     - UT_T1_1
@@ -366,7 +372,7 @@ UT_001:
 
 UT_002:
   extends: .unit_test_32_template
-  parallel: 13
+  parallel: 14
   tags:
     - ESP32_IDF
     - UT_T1_1
@@ -573,14 +579,20 @@ UT_046:
 
 UT_047:
   extends: .unit_test_s2_template
-  parallel: 5
+  parallel: 6
   tags:
     - ESP32S2_IDF
     - UT_T1_1
 
+UT_048:
+  extends: .unit_test_32_template
+  tags:
+    - ESP32_IDF
+    - UT_T1_1
+
 UT_C3:
   extends: .unit_test_c3_template
-  parallel: 30
+  parallel: 31
   tags:
     - ESP32C3_IDF
     - UT_T1_1
@@ -632,11 +644,12 @@ nvs_compatible_test:
     - cd auto_test_script
     - ./tools/prepare_nvs_bin.sh
     # run test
+    - python ${PREPARE_TEST_BIN_SCRIPT} $CONFIG_FILE
     - python ${CI_RUNNER_SCRIPT} -l "$LOG_PATH/$JOB_FULL_NAME" -c $CONFIG_FILE -e $LOCAL_ENV_CONFIG_PATH -t $TEST_CASE_FILE_PATH
 
 IT_001:
   extends: .integration_test_template
-  parallel: 3
+  parallel: 2
   tags:
     - ESP32_IDF
     - SSC_T1_4
@@ -649,34 +662,26 @@ IT_002:
 
 IT_003:
   extends: .integration_test_template
-  parallel: 14
+  parallel: 9
   tags:
     - ESP32_IDF
     - SSC_T2_5
 
-IT_004:
-  extends: .integration_test_template
-  tags:
-    - ESP32_IDF
-    - SSC_T1_APC
-
 IT_005:
   extends: .integration_test_template
-  parallel: 2
   tags:
     - ESP32_IDF
     - SSC_T1_5
 
 IT_006:
   extends: .integration_test_template
-  parallel: 12
+  parallel: 5
   tags:
     - ESP32_IDF
     - SSC_T1_6
 
 IT_007:
   extends: .integration_test_template
-  parallel: 3
   tags:
     - ESP32_IDF
     - SSC_T1_7
@@ -686,12 +691,6 @@ IT_008:
   tags:
     - ESP32_IDF
     - SSC_T1_8
-
-IT_009:
-  extends: .integration_test_template
-  tags:
-    - ESP32_IDF
-    - SSC_T1_3
 
 IT_011:
   extends: .integration_test_template
@@ -745,7 +744,6 @@ IT_018:
 
 IT_019:
   extends: .integration_test_template
-  parallel: 2
   tags:
     - ESP32_IDF
     - SSC_T2_2
@@ -756,8 +754,15 @@ IT_020:
     - ESP32_IDF
     - SSC_T2_3
 
-IT_021:
+IT_022:
   extends: .integration_test_template
   tags:
     - ESP32_IDF
-    - SSC_T2_4
+    - SSC_T3_2
+
+IT_C3_001:
+  extends: .integration_test_esp32c3_template
+  parallel: 5
+  tags:
+    - ESP32C3_IDF
+    - SSC_T2_5

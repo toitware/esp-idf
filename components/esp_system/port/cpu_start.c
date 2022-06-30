@@ -23,7 +23,7 @@
 #include "esp_system.h"
 
 #include "esp_rom_uart.h"
-
+#include "esp_efuse.h"
 #include "esp_clk_internal.h"
 #include "esp_rom_efuse.h"
 #include "esp_rom_sys.h"
@@ -259,6 +259,13 @@ void IRAM_ATTR call_start_cpu0(void)
 #endif
 
 #ifdef __riscv
+    if (cpu_hal_is_debugger_attached()) {
+        /* Let debugger some time to detect that target started, halt it, enable ebreaks and resume.
+           500ms should be enough. */
+        for (uint32_t ms_num = 0; ms_num < 2; ms_num++) {
+            esp_rom_delay_us(100000);
+        }
+    }
     // Configure the global pointer register
     // (This should be the first thing IDF app does, as any other piece of code could be
     // relaxed by the linker to access something relative to __global_pointer$)
@@ -332,6 +339,10 @@ void IRAM_ATTR call_start_cpu0(void)
     rom_config_data_cache_mode(CONFIG_ESP32S3_DATA_CACHE_SIZE, CONFIG_ESP32S3_DCACHE_ASSOCIATED_WAYS, CONFIG_ESP32S3_DATA_CACHE_LINE_SIZE);
     Cache_Resume_DCache(0);
 #endif // CONFIG_IDF_TARGET_ESP32S3
+
+    if (esp_efuse_check_errors() != ESP_OK) {
+        esp_restart();
+    }
 
 #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32C3
     /* Configure the Cache MMU size for instruction and rodata in flash. */

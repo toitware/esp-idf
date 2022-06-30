@@ -266,6 +266,11 @@
 
 #endif
 
+/**
+ * LWIP_DHCP_DISABLE_VENDOR_CLASS_ID==1: Do not add option 60 (Vendor Class Identifier) to DHCP packets
+ */
+#define ESP_DHCP_DISABLE_VENDOR_CLASS_IDENTIFIER       1
+
 /*
    ------------------------------------
    ---------- AUTOIP options ----------
@@ -977,6 +982,7 @@
 #define ESP_LWIP_SELECT                 1
 #define ESP_LWIP_LOCK                   1
 #define ESP_THREAD_PROTECTION           1
+#define ESP_IP_FORWARD                  1
 
 #ifdef CONFIG_LWIP_IPV6_AUTOCONFIG
 #define ESP_IPV6_AUTOCONFIG             CONFIG_LWIP_IPV6_AUTOCONFIG
