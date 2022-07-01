@@ -1259,7 +1259,7 @@ int uart_write_bytes(uart_port_t uart_num, const void *src, size_t size)
     ESP_RETURN_ON_FALSE((uart_num < UART_NUM_MAX), (-1), UART_TAG, "uart_num error");
     ESP_RETURN_ON_FALSE((p_uart_obj[uart_num] != NULL), (-1), UART_TAG, "uart driver error");
     ESP_RETURN_ON_FALSE(src, (-1), UART_TAG, "buffer null");
-    return uart_tx(uart_num, true, src, size, 0, 0);
+    return uart_tx_all(uart_num, true, src, size, 0, 0);
 }
 
 int uart_write_bytes_with_break(uart_port_t uart_num, const void *src, size_t size, int brk_len)
@@ -1269,25 +1269,25 @@ int uart_write_bytes_with_break(uart_port_t uart_num, const void *src, size_t si
     ESP_RETURN_ON_FALSE((size > 0), (-1), UART_TAG, "uart size error");
     ESP_RETURN_ON_FALSE((src), (-1), UART_TAG, "uart data null");
     ESP_RETURN_ON_FALSE((brk_len > 0 && brk_len < 256), (-1), UART_TAG, "break_num error");
-    return uart_tx(uart_num, true, src, size, 1, brk_len);
+    return uart_tx_all(uart_num, true, src, size, 1, brk_len);
 }
 
 int uart_write_bytes_non_blocking(uart_port_t uart_num, const void* src, size_t size)
 {
-    UART_CHECK((uart_num < UART_NUM_MAX), "uart_num error", (-1));
-    UART_CHECK((p_uart_obj[uart_num] != NULL), "uart driver error", (-1));
-    UART_CHECK(src, "buffer null", (-1));
-    return uart_tx(uart_num, false, src, size, 0, 0);
+    ESP_RETURN_ON_FALSE((uart_num < UART_NUM_MAX), (-1), UART_TAG, "uart_num error");
+    ESP_RETURN_ON_FALSE((p_uart_obj[uart_num] != NULL), (-1), UART_TAG, "uart driver error");
+    ESP_RETURN_ON_FALSE(src, (-1), UART_TAG, "buffer null");
+    return uart_tx_all(uart_num, false, src, size, 0, 0);
 }
 
 int uart_write_bytes_with_break_non_blocking(uart_port_t uart_num, const void* src, size_t size, int brk_len)
 {
-    UART_CHECK((uart_num < UART_NUM_MAX), "uart_num error", (-1));
-    UART_CHECK((p_uart_obj[uart_num]), "uart driver error", (-1));
-    UART_CHECK((size > 0), "uart size error", (-1));
-    UART_CHECK((src), "uart data null", (-1));
-    UART_CHECK((brk_len > 0 && brk_len < 256), "break_num error", (-1));
-    return uart_tx(uart_num, false, src, size, 1, brk_len);
+    ESP_RETURN_ON_FALSE((uart_num < UART_NUM_MAX), (-1), UART_TAG, "uart_num error");
+    ESP_RETURN_ON_FALSE((p_uart_obj[uart_num]), (-1), UART_TAG, "uart driver error");
+    ESP_RETURN_ON_FALSE((size > 0), (-1), UART_TAG, "uart size error");
+    ESP_RETURN_ON_FALSE((src), (-1), UART_TAG, "uart data null");
+    ESP_RETURN_ON_FALSE((brk_len > 0 && brk_len < 256), (-1), UART_TAG, "break_num error");
+    return uart_tx_all(uart_num, false, src, size, 1, brk_len);
 }
 
 static bool uart_check_buf_full(uart_port_t uart_num)
