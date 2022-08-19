@@ -297,6 +297,7 @@ struct multi_heap_info {
     size_t remaining;
     size_t free_blocks;
     size_t allocated_blocks;
+    // Includes the array of struct Pages after this struct and some rounding.
     void *end_of_heap_structure;
     void *lock;
     void *ignore_free;  // Actually a bool, but use void* so that it works in IRAM.
@@ -313,6 +314,7 @@ struct multi_heap_info {
     int32_t number_of_pages;
     char *page_base;
     void *highest_address;
+    // Actually has (number_of_pages + 1) elements.
     Page pages[1];
 };
 
@@ -1152,6 +1154,7 @@ static const size_t arena_overhead = 2 * sizeof(header_t) + sizeof(arena_t);
 // Adds an arena for small allocations to the heap.
 IRAM_ATTR static void add_to_heap(cmpct_heap_t *heap, void *new_area, size_t size, free_t **bucket)
 {
+    ASSERT(size < 32 * 1024);  // We use 16 bit offsets within arenas.
     void *top = (char *)new_area + size;
     arena_t *new_arena = (arena_t *)new_area;
     // Link into doubly linked list.
@@ -1211,7 +1214,6 @@ void cmpct_init(cmpct_heap_t *heap)
     // Empty doubly linked list points to itself.
     heap->arenas.previous = &heap->arenas;
     heap->arenas.next = &heap->arenas;
-    heap->end_of_heap_structure = NULL;
 }
 
 // Takes a memory area for a heap.  The first part of the memory that was given
@@ -1222,7 +1224,7 @@ void cmpct_init(cmpct_heap_t *heap)
 // the code that detects wholly empty pages and returns them to the page allocator.
 cmpct_heap_t *cmpct_register_impl(void *start, size_t size)
 {
-    if (size < sizeof(cmpct_heap_t)) return NULL;  // Area too small.
+    if (size < sizeof(cmpct_heap_t) + sizeof(header_t)) return NULL;  // Area too small.
     // We can't have more pages than the rounded down size so
     // this does an optimistic calculation of the number pages.
     intptr_t pages = size >> PAGE_SIZE_SHIFT;
@@ -1232,14 +1234,16 @@ cmpct_heap_t *cmpct_register_impl(void *start, size_t size)
     intptr_t header_waste = ROUND_UP(start_int, sizeof(header_t)) - start_int;
     uintptr_t end_int = (uintptr_t)start + size;
     start_int += header_waste;
-    uintptr_t end_of_struct = start_int + sizeof(cmpct_heap_t) + pages * sizeof(Page);
+    uintptr_t end_of_struct = ROUND_UP(start_int + sizeof(cmpct_heap_t) + pages * sizeof(Page), sizeof(header_t));
     ASSERT(end_of_struct <= end_int);
     uintptr_t start_of_first_page = ROUND_UP(end_of_struct, PAGE_SIZE);
 
-    // May be a little smaller than the old value of pages.
+    // May be a little smaller than the old value of pages because the array of
+    // struct Pages goes into what we thought would the first page(s).
     pages = start_of_first_page > end_int ? 0 : (end_int - start_of_first_page) >> PAGE_SIZE_SHIFT;
 
     cmpct_heap_t *page_heap = (cmpct_heap_t *)start_int;
+    page_heap->end_of_heap_structure = (void*)end_of_struct;
     page_heap->number_of_pages = pages;
     page_heap->page_base = (char *)start_of_first_page;
     for (size_t i = 0; i < pages; i++) {
@@ -1256,22 +1260,19 @@ cmpct_heap_t *cmpct_register_impl(void *start, size_t size)
 
     cmpct_init(page_heap);
 
-    uintptr_t rest_of_zeroth_page = ROUND_UP(end_of_struct, sizeof(header_t));
-
     // If we were handed a very small amount of memory then we just give the
     // entire space to the small allocation arena.
     if (start_of_first_page >= end_int) {
-        intptr_t rest = ROUND_DOWN(end_int, sizeof(header_t)) - rest_of_zeroth_page;
+        intptr_t rest = ROUND_DOWN(end_int, sizeof(header_t)) - end_of_struct;
         if (rest >= (intptr_t)(arena_overhead + sizeof(free_t))) {
-            add_to_heap(page_heap, (void *)rest_of_zeroth_page, rest, NULL);
+            add_to_heap(page_heap, (void *)end_of_struct, rest, NULL);
         }
     } else {
         // Unaligned memory before the start of the first page is added to the
         // heap for small allocations.
-        intptr_t rest = start_of_first_page - rest_of_zeroth_page;
+        intptr_t rest = start_of_first_page - end_of_struct;
         if (rest > (intptr_t)(arena_overhead + sizeof(free_t))) {
-            add_to_heap(page_heap, (void *)rest_of_zeroth_page, rest, NULL);
-            page_heap->end_of_heap_structure = (void *)rest_of_zeroth_page;
+            add_to_heap(page_heap, (void *)end_of_struct, rest, NULL);
         }
         // Unaligned memory after the end of the last page can also be added to
         // the heap for small allocations.
@@ -1618,8 +1619,7 @@ void cmpct_get_info_impl(cmpct_heap_t *heap, multi_heap_info_t *info)
     info->total_blocks = info->free_blocks + info->allocated_blocks;
     // The implementation always takes the first part of its area for admin, so
     // it can never return an address that is lower than the end of that.
-    // Use C pointer arithmetic when adding 1 to heap pointer.
-    info->lowest_address = (void *)((uintptr_t)(heap + 1) + sizeof(Page) * heap->number_of_pages);
+    info->lowest_address = heap->end_of_heap_structure;
     info->highest_address = heap->highest_address;
     unlock(heap);
 }
@@ -1888,7 +1888,7 @@ int main(int argc, char *argv[])
         void* arena = malloc(size);
         cmpct_heap_t* small_heap = cmpct_register_impl(arena, size);
         if (small_heap == NULL) {
-            ASSERT(size < sizeof(cmpct_heap_t));
+            ASSERT(size < sizeof(cmpct_heap_t) + sizeof(header_t));
             free(arena);
             continue;
         }
