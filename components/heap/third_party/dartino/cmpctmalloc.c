@@ -148,7 +148,7 @@ static int first_allocations = true;
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 // Provoke crash.  Often because of a double free.
-#define FATAL(reason) do { *(char*)(0xdeadf1ee) = 0; abort(); } while (0)
+#define FATAL(reason) do { *(char *)(0xdeadf1ee) = 0; abort(); } while (0)
 #define INLINE __attribute__((always_inline)) inline
 
 // This is a two layer allocator.  Allocations that are a multiple of 4k in
@@ -695,7 +695,7 @@ static void cmpct_test_get_info(cmpct_heap_t *heap)
 
     size_t SIZE = 1024 * 16;
 
-    void* p = cmpct_malloc_impl(heap, SIZE);
+    void *p = cmpct_malloc_impl(heap, SIZE);
 
     cmpct_get_info_impl(heap, &info);
     size_t free_bytes_2 = info.total_free_bytes;
@@ -733,7 +733,7 @@ static void cmpct_test_realloc(cmpct_heap_t *heap)
        falls back to overlapping reallocations.  This allocation is
        adjusted until there are exactly 8 pages left at the end of
        the page pool.  */
-    uint8_t *most_of_the_heap = cmpct_malloc_impl(heap, 1500000 - PAGE_SIZE * (sizeof(void*) == 8 ? 12 : 11));
+    uint8_t *most_of_the_heap = cmpct_malloc_impl(heap, 1500000 - PAGE_SIZE * (sizeof(void *) == 8 ? 12 : 11));
     ASSERT(most_of_the_heap);
 
     size_t post_most_remaining = heap->remaining;
@@ -1243,7 +1243,7 @@ cmpct_heap_t *cmpct_register_impl(void *start, size_t size)
     pages = start_of_first_page > end_int ? 0 : (end_int - start_of_first_page) >> PAGE_SIZE_SHIFT;
 
     cmpct_heap_t *page_heap = (cmpct_heap_t *)start_int;
-    page_heap->end_of_heap_structure = (void*)end_of_struct;
+    page_heap->end_of_heap_structure = (void *)end_of_struct;
     page_heap->number_of_pages = pages;
     page_heap->page_base = (char *)start_of_first_page;
     for (size_t i = 0; i < pages; i++) {
@@ -1452,7 +1452,7 @@ IRAM_ATTR static void *page_grow_allocation(cmpct_heap_t *heap, void *p, size_t 
     /* Move the data to the new location.  */
     size_t distance = (old_page - new_page) << PAGE_SIZE_SHIFT;
     if (distance == 0) return p;
-    uint8_t* destination = (uint8_t *)p - distance;
+    uint8_t *destination = (uint8_t *)p - distance;
     memmove(destination, p, old_pages << PAGE_SIZE_SHIFT);
     return destination;
 }
@@ -1841,7 +1841,7 @@ gcc -m32 -ffreestanding -fsanitize=address -DTEST_CMPCTMALLOC -DDEBUG=1 -g -o te
 gcc      -ffreestanding -fsanitize=address -DTEST_CMPCTMALLOC -DDEBUG=1 -g -o test third_party/esp-idf/components/heap/third_party/dartino/cmpctmalloc.c -pthread && ./test
  */
 
-void assert_heap_is_empty(cmpct_heap_t* heap)
+void assert_heap_is_empty(cmpct_heap_t *heap)
 {
     multi_heap_info_t info;
     cmpct_get_info_impl(heap, &info);
@@ -1885,8 +1885,8 @@ int main(int argc, char *argv[])
 
     for (int size = 0; size < 12000; size++) {
         int first_success = -1;
-        void* arena = malloc(size);
-        cmpct_heap_t* small_heap = cmpct_register_impl(arena, size);
+        void *arena = malloc(size);
+        cmpct_heap_t *small_heap = cmpct_register_impl(arena, size);
         if (small_heap == NULL) {
             ASSERT(size < sizeof(cmpct_heap_t) + sizeof(header_t));
             free(arena);
