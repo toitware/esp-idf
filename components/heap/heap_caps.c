@@ -485,11 +485,11 @@ size_t heap_caps_get_minimum_free_size( uint32_t caps )
     return ret;
 }
 
-void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, tagged_memory_callback_t callback, int flags)
+void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, tagged_memory_callback_t callback, uint32_t flags, uint32_t caps)
 {
     heap_t *heap;
     SLIST_FOREACH(heap, &registered_heaps, next) {
-        if (heap->heap) {
+        if (heap_caps_match(heap, caps)) {
             multi_heap_iterate_tagged_memory_areas(heap->heap, user_data, tag, callback, flags);
         }
     }

@@ -90,7 +90,7 @@ size_t multi_heap_free_size(cmpct_heap_t *heap)
 size_t multi_heap_minimum_free_size(cmpct_heap_t *heap)
     __attribute__((alias("cmpct_minimum_free_size_impl")));
 
-void multi_heap_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void *tag, tagged_memory_callback_t callback, int flags)
+void multi_heap_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void *tag, tagged_memory_callback_t callback, uint32_t flags)
     __attribute__((alias("cmpct_iterate_tagged_memory_areas")));
 
 void multi_heap_set_option(cmpct_heap_t *heap, int option, void *value)
@@ -1772,7 +1772,7 @@ void *cmpct_get_option(int option)
 #endif
 }
 
-void cmpct_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void *tag, tagged_memory_callback_t callback, int flags)
+void cmpct_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void *tag, tagged_memory_callback_t callback, uint32_t flags)
 {
     if ((flags & CMPCTMALLOC_ITERATE_UNLOCKED) == 0) {
         lock(heap);
@@ -2022,7 +2022,7 @@ void *realloc(void *old, size_t size)
 }
 
 typedef bool heap_caps_iterate_callback(void *, void *, void *, size_t);
-void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, heap_caps_iterate_callback callback, int flags)
+void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, heap_caps_iterate_callback callback, uint32_t flags, uint32_t caps)
 {
     cmpct_iterate_tagged_memory_areas(heap, user_data, tag, callback, flags);
 }

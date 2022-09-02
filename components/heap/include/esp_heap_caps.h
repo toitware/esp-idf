@@ -420,12 +420,20 @@ size_t heap_caps_get_allocated_size( void *ptr );
  * filter manually on the tag it is passed.  Note that the callback cannot
  * allocate or deallocate, and this often means it cannot call printf.
  *
- * @param user_data   A value that will be passed to each invocation of the callback.
- * @param tag         An opaque piece of data that was passed to heap_caps_set_option with the option MALLOC_OPTION_THREAD_TAG.
- * @param callback    A function to be called for each not-yet-freed memory area with the given tag.
- * @param flags       Zero or a set of flags, 'or'ed together from MALLOC_ITERATE_UNLOCKED, MALLOC_ITERATE_ALL_ALLOCATIONS and MALLOC_ITERATE_UNALLOCATED.
+ * @param user_data   A value that will be passed to each invocation of the
+ *                    callback.
+ * @param tag         An opaque piece of data that was passed to
+ *                    heap_caps_set_option with the option
+ *                    MALLOC_OPTION_THREAD_TAG.
+ * @param callback    A function to be called for each not-yet-freed memory
+ *                    area with the given tag.
+ * @param flags       Zero or a set of flags, 'or'ed together from
+ *                    MALLOC_ITERATE_UNLOCKED, MALLOC_ITERATE_ALL_ALLOCATIONS
+ *                    and MALLOC_ITERATE_UNALLOCATED.
+ * @param caps        Bitwise OR of MALLOC_CAP_* flags indicating the type of
+ *                    memory
  */
-void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, tagged_memory_callback_t callback, int flags);
+void heap_caps_iterate_tagged_memory_areas(void *user_data, void *tag, tagged_memory_callback_t callback, uint32_t flags, uint32_t caps);
 
 /**
  * @brief Set global flags and options for the malloc heap.
