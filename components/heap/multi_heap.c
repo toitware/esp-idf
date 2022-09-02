@@ -70,6 +70,20 @@ void *multi_heap_get_block_owner(multi_heap_block_handle_t block)
     return NULL;
 }
 
+void multi_heap_set_option(multi_heap_handle_t heap, int option, void *value)
+{
+}
+
+void *multi_heap_get_option(int option)
+{
+    return NULL;
+}
+
+void multi_heap_iterate_tagged_memory_areas(multi_heap_handle_t heap, void *user_data, void *tag, tagged_memory_callback_t callback, uint32_t flags)
+{
+}
+
+
 #endif
 
 #define ALIGN(X) ((X) & ~(sizeof(void *)-1))
