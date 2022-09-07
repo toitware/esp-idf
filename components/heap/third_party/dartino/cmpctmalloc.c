@@ -1640,28 +1640,41 @@ IRAM_ATTR static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, uintptr_t 
     // overflow. This can happen if PAGES_FOR_BYTES was used on
     // a really big size.
     if (pages == 0) return NULL;
-    for (int i = 0; i <= heap->number_of_pages - pages; i++) {
+    if (pages >= heap->number_of_pages) return NULL;
+    int page_direction = 1;
+    int page_start = 0;
+    int page_end = heap->number_of_pages - pages;
+    if (tag == (void *)(-96)) {  // Toit heap allocation.
+        page_direction = -1;
+        page_start = heap->number_of_pages - 1;
+        page_end =  heap->number_of_pages + 1;  // Won't be using this.
+    }
+    for (int i = page_start; i <= page_end && i >= 0; i += page_direction) {
         uintptr_t start_address = (uintptr_t)(heap->page_base + i * PAGE_SIZE);
+        if (page_direction < 0) start_address -= (pages - 1) * PAGE_SIZE;
         if (heap->pages[i].status == PAGE_FREE && (start_address & (alignment - 1)) == 0) {
             bool big_enough = true;
             for (int j = 1; j < pages; j++) {
-                if (heap->pages[i + j].status != PAGE_FREE) {
+                int index = i + j * page_direction;
+                if (index < 0 || heap->pages[index].status != PAGE_FREE) {
                     big_enough = false;
-                    i += j;
+                    i += j * page_direction;
                     break;
                 }
             }
             if (big_enough) {
-                heap->pages[i].status = PAGE_IN_USE;
-                heap->pages[i].tag = tag;
+                int first_page = page_direction > 0 ? i : i + 1 - pages;
+                heap->pages[first_page].status = PAGE_IN_USE;
+                heap->pages[first_page].tag = tag;
                 for (int j = 1; j < pages; j++) {
-                    heap->pages[i + j].status = PAGE_CONTINUED;
+                    heap->pages[first_page + j].status = PAGE_CONTINUED;
                 }
-                void *result = heap->page_base + i * PAGE_SIZE;
+                void *result = (void *)start_address;
                 for (int i = 0; i < pages << PAGE_SIZE_SHIFT; i += sizeof(int)) {
                     ((int *)(result))[i >> 2] = 0;
                 }
-                if (heap->pages[i + pages].status != PAGE_FREE) {
+                if (heap->pages[first_page + pages].status != PAGE_FREE &&
+                    (first_page == 0 || heap->pages[first_page - 1].status != PAGE_FREE)) {
                   // We used up a whole contiguous sequence of free pages so
                   // this reduced the number of free blocks.
                   heap->free_blocks--;
@@ -1670,7 +1683,7 @@ IRAM_ATTR static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, uintptr_t 
                 // allocations then most of this reduction in heap->remaining
                 // will be re-added in create_free_area.
                 heap->remaining -= pages * PAGE_SIZE;
-                return heap->page_base + i * PAGE_SIZE;
+                return (void *)start_address;
             }
         }
     }
