@@ -1287,16 +1287,16 @@ cmpct_heap_t *cmpct_register_impl(void *start, size_t size)
 
 IRAM_ATTR void *cmpct_malloc_impl(cmpct_heap_t *heap, size_t size)
 {
-    // Short cut: Small allocations go to the bucket allocator without
-    // thinking too much about it.  Also takes care of zero length allocations.
-    size_t ALMOST_FULL_PAGE = PAGE_SIZE / 4 * 3;
-    if (size <= ALMOST_FULL_PAGE) {
-      return cmpct_alloc(heap, size);
-    }
-    // Allocations 4-6k are allocated using the bucket allocator from a larger
-    // area.  Everything else is rounded up to 4k and taken from the page
-    // allocator.
-    if (size > PAGE_SIZE && size < PAGE_SIZE * 3 / 2) {
+    // Allocations smaller than 0.75 pages or between one page and 1.5 pages
+    // are allocated using the bucket allocator from a larger area.  Everything
+    // else is rounded up to a page size and taken from the page allocator.
+    // (It is important for correctness that 0 length allocations don't go to
+    // the page allocator.)
+    const size_t ALMOST_FULL_PAGE = PAGE_SIZE / 4 * 3;
+    const size_t PAGE_AND_A_HALF = PAGE_SIZE / 2 * 3;
+    ASSERT(PAGE_AND_A_HALF <= SMALL_ALLOCATION_LIMIT);
+    if (size < ALMOST_FULL_PAGE ||
+        PAGE_SIZE < size && size <= PAGE_AND_A_HALF) {
       return cmpct_alloc(heap, size);
     }
     // Size is (almost) a multiple of page size or just big.
