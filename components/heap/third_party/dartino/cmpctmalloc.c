@@ -1296,7 +1296,7 @@ IRAM_ATTR void *cmpct_malloc_impl(cmpct_heap_t *heap, size_t size)
     const size_t PAGE_AND_A_HALF = PAGE_SIZE / 2 * 3;
     ASSERT(PAGE_AND_A_HALF <= SMALL_ALLOCATION_LIMIT);
     if (size < ALMOST_FULL_PAGE ||
-        PAGE_SIZE < size && size <= PAGE_AND_A_HALF) {
+        (PAGE_SIZE < size && size <= PAGE_AND_A_HALF)) {
       return cmpct_alloc(heap, size);
     }
     // Size is (almost) a multiple of page size or just big.
