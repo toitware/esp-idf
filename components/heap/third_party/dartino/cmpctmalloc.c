@@ -191,7 +191,7 @@ static void *allocation_tail(cmpct_heap_t *heap, struct free_struct *head, size_
 #define IS_PAGE_ALIGNED(x) (((uintptr_t)(x) & (PAGE_SIZE - 1)) == 0)
 #define PAGES_FOR_BYTES(x) (((x) + PAGE_SIZE - 1) >> PAGE_SIZE_SHIFT)
 
-// Individual allocations above 16kbytes are just fetched directly from the
+// Individual allocations above 16kbytes must be fetched directly from the
 // block allocator.
 #define HEAP_ALLOC_VIRTUAL_BITS 14
 // The biggest allocation on a page is limited by size of the biggest bucket.
@@ -1287,17 +1287,19 @@ cmpct_heap_t *cmpct_register_impl(void *start, size_t size)
 
 IRAM_ATTR void *cmpct_malloc_impl(cmpct_heap_t *heap, size_t size)
 {
-    // Allocations of page-aligned sizes go directly to the page allocator,
-    // but zero-length allocations can't be handled by the page allocator.
-    // Also, large allocations are handled by the page allocator.
-    if (size <= SMALL_ALLOCATION_LIMIT &&
-        (size == 0 || (size & (PAGE_SIZE - 1)) != 0)) {
-        // The SMALL_ALLOCATION_LIMIT is determined by the biggest bucket, but
-        // we also need to ensure the largest possible in-page space is large
-        // enough.  A page has a given overhead, and a single almost-page-filling
-        // allocation also needs a header.
-        return cmpct_alloc(heap, size);
+    // Short cut: Small allocations go to the bucket allocator without
+    // thinking too much about it.  Also takes care of zero length allocations.
+    size_t ALMOST_FULL_PAGE = PAGE_SIZE / 4 * 3;
+    if (size <= ALMOST_FULL_PAGE) {
+      return cmpct_alloc(heap, size);
     }
+    // Allocations 4-6k are allocated using the bucket allocator from a larger
+    // area.  Everything else is rounded up to 4k and taken from the page
+    // allocator.
+    if (size > PAGE_SIZE && size < PAGE_SIZE * 3 / 2) {
+      return cmpct_alloc(heap, size);
+    }
+    // Size is (almost) a multiple of page size or just big.
     lock(heap);
     void *tag = GET_THREAD_LOCAL_TAG;
     void *result = page_alloc(heap, PAGES_FOR_BYTES(size), PAGE_SIZE, tag);
