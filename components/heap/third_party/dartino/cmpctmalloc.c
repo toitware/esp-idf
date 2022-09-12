@@ -135,7 +135,7 @@ static int first_allocations = true;
 // TODO: Find out whether non-xtensa ESP-IDF platforms call malloc from within
 // interrupts.  This has been deprecated for years, but may still be in the
 // code base.  For now, don't tag allocations.
-#define GET_THREAD_LOCAL_TAG null
+#define GET_THREAD_LOCAL_TAG NULL
 #else
 #define GET_THREAD_LOCAL_TAG (pvTaskGetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX))
 #endif
@@ -169,8 +169,8 @@ size_t cmpct_free_size_impl(cmpct_heap_t *heap);
 size_t cmpct_get_allocated_size_impl(cmpct_heap_t *heap, void *p);
 void cmpct_set_option(cmpct_heap_t *heap, int option, void *value);
 void *cmpct_get_option(int option);
-static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, uintptr_t alignment, void *tag);
-static void page_free(cmpct_heap_t *heap, void *address, int pages_unused);
+static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, uintptr_t alignment, void *tag, bool for_malloc);
+static void page_free(cmpct_heap_t *heap, void *address, int pages_unused, bool for_malloc);
 struct header_struct;
 struct free_struct;
 static inline struct header_struct *right_header(struct header_struct *header);
@@ -275,8 +275,9 @@ typedef struct free_struct {
 
 typedef enum {
     PAGE_FREE = 0,
-    PAGE_IN_USE = 1,    // Page is first in an allocation.
-    PAGE_CONTINUED = 2  // Page is subsequent in an allocation.
+    PAGE_IN_USE = 1,              // Page is first in an allocation.
+    PAGE_IN_USE_FOR_MALLOCS = 2,  // Page is first in a malloc arena, used for smaller allocations.
+    PAGE_CONTINUED = 3            // Page is subsequent in an allocation.
 } page_use_t;
 
 // For page allocator, not originally part of cmpctmalloc.  These fields are 32 bit
@@ -513,7 +514,7 @@ IRAM_ATTR static void free_to_page_allocator(cmpct_heap_t *heap, header_t *heade
     previous->next = next;
 
     DEBUG_ASSERT(IS_PAGE_ALIGNED(size));
-    page_free(heap, arena, size >> PAGE_SIZE_SHIFT);
+    page_free(heap, arena, size >> PAGE_SIZE_SHIFT, /* for_malloc = */ true);
     // Adjust the heap->size.  Free pages are counted fully, but arenas
     // allocated on pages have the arena pointer and sentinels subtracted.
     heap->size += sizeof(arena_t) + 2 * sizeof(header_t);
@@ -1182,7 +1183,7 @@ IRAM_ATTR static ssize_t heap_grow(cmpct_heap_t *heap, free_t **bucket, int page
 {
     // Allocate more pages.  The allocation tag is a pointer to the heap
     // itself so that it won't match any allocation tag used by the program.
-    void *ptr = page_alloc(heap, pages, PAGE_SIZE, heap);
+    void *ptr = page_alloc(heap, pages, PAGE_SIZE, NULL, /* for_malloc = */ true);
     if (ptr == NULL) return -1;
     LTRACEF("growing heap by 0x%x bytes, new ptr %p\n", pages << PAGE_SIZE_SHIFT, ptr);
     // Add_to_heap will increase size.  That's often OK when we are adding
@@ -1302,7 +1303,7 @@ IRAM_ATTR void *cmpct_malloc_impl(cmpct_heap_t *heap, size_t size)
     // Size is (almost) a multiple of page size or just big.
     lock(heap);
     void *tag = GET_THREAD_LOCAL_TAG;
-    void *result = page_alloc(heap, PAGES_FOR_BYTES(size), PAGE_SIZE, tag);
+    void *result = page_alloc(heap, PAGES_FOR_BYTES(size), PAGE_SIZE, tag, /* for_malloc = */ false);
     unlock(heap);
     return result;
 }
@@ -1319,7 +1320,7 @@ IRAM_ATTR void *cmpct_aligned_alloc_impl(cmpct_heap_t *heap, size_t size, size_t
         // actually wastes even more.
         lock(heap);
         void *tag = GET_THREAD_LOCAL_TAG;
-        void *result = page_alloc(heap, PAGES_FOR_BYTES(size), alignment, tag);
+        void *result = page_alloc(heap, PAGES_FOR_BYTES(size), alignment, tag, /* for_malloc = */ false);
         unlock(heap);
         return result;
     }
@@ -1387,9 +1388,7 @@ IRAM_ATTR static bool is_page_allocated(cmpct_heap_t *heap, void *p)
     // that happens to be aligned.
     size_t page = page_number(heap, p);
     // Only the first page in a multi-page allocation is marked as PAGE_IN_USE.
-    // The others are marked as PAGE_CONTINUED.  This also applies to multiple
-    // pages that were taken from the page allocator for use in a multi-page
-    // arena.
+    // The others are marked as PAGE_CONTINUED.
     int status = heap->pages[page].status;
     if (status == PAGE_FREE) FATAL("Invalid free");
     return status == PAGE_IN_USE;
@@ -1399,7 +1398,7 @@ IRAM_ATTR void cmpct_free_impl(cmpct_heap_t *heap, void *p)
 {
     if (is_page_allocated(heap, p)) {
         lock(heap);
-        page_free(heap, p, 0);
+        page_free(heap, p, 0, /* for_malloc = */ false);
         unlock(heap);
     } else {
         cmpct_free(heap, p);
@@ -1427,8 +1426,9 @@ IRAM_ATTR size_t cmpct_get_allocated_size_impl(cmpct_heap_t *heap, void *p)
     for (size_t i = 1; true; i++) {
         /* The pages always end with a dummy allocated page.
            Since we don't necessarily have the lock the status of the
-           one-past-the-end page may change between PAGE_FREE and PAGE_IN_USE,
-           but both will give the same result here.  */
+           one-past-the-end page may change between PAGE_FREE,
+           PAGE_IN_USE, and PAGE_IN_USE_FOR_MALLOCS, but all will
+           give the same result here.  */
         if (heap->pages[page + i].status != PAGE_CONTINUED) return i << PAGE_SIZE_SHIFT;
     }
 }
@@ -1565,10 +1565,11 @@ void cmpct_get_info_impl(cmpct_heap_t *heap, multi_heap_info_t *info)
     info->free_blocks = heap->free_blocks;
     size_t current_page_run = 0;
     page_use_t current_status = PAGE_FREE;
-    void *current_tag = NULL;
+    bool current_page_run_is_a_single_allocation = false;
     // Include sentinel in iteration.
     for (size_t i = 0; i <= heap->number_of_pages; i++) {
-        if (heap->pages[i].status == current_status && i != heap->number_of_pages) {
+        Page *page = &heap->pages[i];
+        if (page->status == current_status && i != heap->number_of_pages) {
             current_page_run += PAGE_SIZE;
         } else {
             if (current_status == PAGE_FREE) {
@@ -1580,20 +1581,21 @@ void cmpct_get_info_impl(cmpct_heap_t *heap, multi_heap_info_t *info)
                 }
             } else {
                 ASSERT(current_status == PAGE_CONTINUED);
-                if (current_tag != heap) {  // Pages used for the sub-page allocator are self-tagged.
+                if (current_page_run_is_a_single_allocation) {
                     if (current_page_run != 0) info->allocated_blocks++;
                 }
             }
-            if (heap->pages[i].status == PAGE_FREE) {
+            if (page->status == PAGE_FREE) {
                 current_status = PAGE_FREE;
             } else {
                 // When we move from one allocation to the next the first page
                 // in the new allocation is in use or free (never continued).
-                ASSERT(heap->pages[i].status == PAGE_IN_USE);
+                ASSERT(page->status == PAGE_IN_USE ||
+                       page->status == PAGE_IN_USE_FOR_MALLOCS);
                 // Subsequent pages in the same allocation will be marked as
                 // continued, so set us up to expect that.
                 current_status = PAGE_CONTINUED;
-                current_tag = heap->pages[i].tag;
+                current_page_run_is_a_single_allocation = page->status == PAGE_IN_USE;
             }
             current_page_run = PAGE_SIZE;
         }
@@ -1634,7 +1636,7 @@ size_t cmpct_minimum_free_size_impl(cmpct_heap_t *heap)
 }
 
 // Called with the lock.
-IRAM_ATTR static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, uintptr_t alignment, void *tag)
+IRAM_ATTR static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, uintptr_t alignment, void *tag, bool for_malloc)
 {
     // If pages == 0, then we assume that the caller ran into an integer
     // overflow. This can happen if PAGES_FOR_BYTES was used on
@@ -1652,7 +1654,7 @@ IRAM_ATTR static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, uintptr_t 
                 }
             }
             if (big_enough) {
-                heap->pages[i].status = PAGE_IN_USE;
+                heap->pages[i].status = for_malloc ? PAGE_IN_USE_FOR_MALLOCS : PAGE_IN_USE;
                 heap->pages[i].tag = tag;
                 for (int j = 1; j < pages; j++) {
                     heap->pages[i + j].status = PAGE_CONTINUED;
@@ -1681,7 +1683,7 @@ IRAM_ATTR static void page_iterate(cmpct_heap_t *heap, void *user_data, void *ta
 {
     for (int i = 0; i < heap->number_of_pages; i++) {
         int status = heap->pages[i].status;
-        if (status == PAGE_IN_USE || status == PAGE_FREE) {
+        if (status != PAGE_CONTINUED) {
             // A flag can indicate that we should iterate over all allocations, but we still
             // don't iterate over the page allocations that the sub-page allocator made.
             bool iterate_free = false;
@@ -1695,7 +1697,7 @@ IRAM_ATTR static void page_iterate(cmpct_heap_t *heap, void *user_data, void *ta
             }
             if (status == PAGE_IN_USE &&
                 (heap->pages[i].tag == tag ||
-                 ((flags & CMPCTMALLOC_ITERATE_ALL_ALLOCATIONS) != 0 && heap->pages[i].tag != heap))) {
+                 (flags & CMPCTMALLOC_ITERATE_ALL_ALLOCATIONS) != 0)) {
                 iterate_allocated = true;
                 continuation_status = PAGE_CONTINUED;  // It's all one area as long as we see continued pages.
                 found_tag = heap->pages[i].tag;
@@ -1707,7 +1709,7 @@ IRAM_ATTR static void page_iterate(cmpct_heap_t *heap, void *user_data, void *ta
                         void *allocation = heap->page_base + i * PAGE_SIZE;
                         if (callback(user_data, found_tag, allocation, j * PAGE_SIZE) && iterate_allocated) {
                             // Callback indicates we should free the memory.
-                            page_free(heap, allocation, j);
+                            page_free(heap, allocation, j, /* for_malloc = */ false);
                         }
                         i += j - 1;
                         break;
@@ -1722,11 +1724,12 @@ IRAM_ATTR static void page_iterate(cmpct_heap_t *heap, void *user_data, void *ta
 // does not contain support for trimming a region obtained from the page
 // allocator, so the number of pages is always the number of pages allocated,
 // and we ignore the page count argument.  Called with the lock.
-IRAM_ATTR static void page_free(cmpct_heap_t *heap, void *address, int page_count_unused)
+IRAM_ATTR static void page_free(cmpct_heap_t *heap, void *address, int page_count_unused, bool for_malloc)
 {
     size_t page = page_number(heap, address);
     bool previous_is_free = page != 0 && heap->pages[page - 1].status == PAGE_FREE;
-    if (page >= heap->number_of_pages || heap->pages[page].status != PAGE_IN_USE) {
+    int expected_status = for_malloc ? PAGE_IN_USE_FOR_MALLOCS : PAGE_IN_USE;
+    if (page >= heap->number_of_pages || heap->pages[page].status != expected_status) {
         FATAL("Invalid free");
     }
     int pages_freed = 1;
