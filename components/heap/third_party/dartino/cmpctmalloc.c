@@ -195,19 +195,19 @@ static void *allocation_tail(cmpct_heap_t *heap, struct free_struct *head, size_
 // block allocator.
 #define HEAP_ALLOC_VIRTUAL_BITS 14
 // The biggest allocation on a page is limited by size of the biggest bucket.
-// With 8 buckets per order of magnitude the biggest bucket is bucket 7 (binary
-// 111) and so follows the pattern 1 111 0*.  Bucket sizes don't include the
+// With 4 buckets per order of magnitude the biggest bucket is bucket 3 (binary
+// 11) and so follows the pattern 1 11 0*.  Bucket sizes don't include the
 // header.
-#define SMALL_ALLOCATION_LIMIT ((0xf << (HEAP_ALLOC_VIRTUAL_BITS - 4)))
+#define SMALL_ALLOCATION_LIMIT ((0x3 << (HEAP_ALLOC_VIRTUAL_BITS - 2)))
 #define ROUNDED_SMALL_ALLOCATION_LIMIT (1 << HEAP_ALLOC_VIRTUAL_BITS)
 
-// Buckets for allocations.  The smallest 15 buckets are 8, 16, 24, etc. up to
-// 120 bytes.  After that we round up to the nearest size that can be written
-// /^0*1...0*$/, giving 8 buckets per order of binary magnitude.  The freelist
+// Buckets for allocations.  The smallest 7 buckets are 8, 16, 24, etc. up to
+// 56 bytes.  After that we round up to the nearest size that can be written
+// /^0*1..0*$/, giving 4 buckets per order of binary magnitude.  The freelist
 // entries in a given bucket have at least the given size, plus the header
 // size.  On 64 bit, the 8 byte bucket is useless, since the freelist header
 // is 16 bytes larger than the header, but we have it for simplicity.
-#define NUMBER_OF_BUCKETS (1 + 15 + (HEAP_ALLOC_VIRTUAL_BITS - 7) * 8)
+#define NUMBER_OF_BUCKETS (1 + 7 + (HEAP_ALLOC_VIRTUAL_BITS - 6) * 4)
 
 // Everything that happens on the heap is 8-byte aligned.
 #define NATURAL_ALIGNMENT 8
@@ -366,8 +366,8 @@ void cmpct_dump(cmpct_heap_t *heap)
 IRAM_ATTR static int size_to_index_helper(
     size_t size, size_t *rounded_up_out, int adjust, int increment)
 {
-    // First buckets are simply 8-spaced up to 128.
-    if (size <= 128) {
+    // First buckets are simply 8-spaced up to 64.
+    if (size <= 64) {
         if (sizeof(size_t) == 8u && size <= sizeof(free_t) - sizeof(header_t)) {
             *rounded_up_out = sizeof(free_t) - sizeof(header_t);
         } else {
@@ -386,21 +386,22 @@ IRAM_ATTR static int size_to_index_helper(
     // will do the right thing (the carry propagates up for the round numbers
     // we are interested in).
     size += adjust;
-    // After 128 the buckets are logarithmically spaced, every 16 up to 256,
-    // every 32 up to 512 etc.  This can be thought of as rows of 8 buckets.
+    // After 64 the buckets are logarithmically spaced, every 16 up to 128,
+    // every 32 up to 256 etc.  This can be thought of as rows of 4 buckets.
     // We use the compiler intrinsic count-leading-zeros to find the bucket.
-    // Eg. 128-255 has 24 leading zeros and we want row to be 4.
-    unsigned row = sizeof(size_t) * 8 - (4 + __builtin_clzl(size));
-    // For row 4 we want to shift down 4 bits.
-    unsigned column = (size >> row) & 7;
-    int row_column = (row << 3) | column;
+    // Eg. 64-127 has 25 leading zeros and we want row to be 4 because we
+    // are throwing away the last 4 bits of the size.
+    unsigned row = sizeof(size_t) * 8 - (3 + __builtin_clzl(size));
+    // For row 4 we want to shift down 4 bits so that 1xxyyyy becomes xx.
+    unsigned column = (size >> row) & 3;
+    int row_column = (row << 2) | column;
     row_column += increment;
-    size = (8 + (row_column & 7)) << (row_column >> 3);
+    size = (4 + (row_column & 3)) << (row_column >> 2);
     *rounded_up_out = size;
-    // We start with 15 buckets, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96,
-    // 104, 112, 120.  Then we have row 4, sizes 128 and up, with the
-    // row-column 8 and up.
-    unsigned answer = row_column + 15 - 32;
+    // We start with 7 buckets, 8, 16, 24, 32, 40, 48, 56.
+    // Then we have row 4, sizes 64 and up, with the
+    // row-column 16 and up.
+    unsigned answer = row_column + 7 - 16;
     if (answer >= NUMBER_OF_BUCKETS) FATAL("Invalid free");
     return answer;
 }
@@ -408,8 +409,9 @@ IRAM_ATTR static int size_to_index_helper(
 // Round up size to next bucket when allocating.
 IRAM_ATTR static int size_to_index_allocating(size_t size, size_t *rounded_up_out)
 {
+    ASSERT(size != 0);
     size_t rounded = ROUND_UP(size, NATURAL_ALIGNMENT);
-    return size_to_index_helper(rounded, rounded_up_out, -8, 1);
+    return size_to_index_helper(rounded, rounded_up_out, -4, 1);
 }
 
 // Round down size to next bucket when freeing.
@@ -585,8 +587,8 @@ IRAM_ATTR void *cmpct_aligned_alloc_impl(cmpct_heap_t *heap, size_t size, size_t
 void cmpct_test_buckets(void)
 {
     size_t rounded;
-    int bucket; // Check for the 8-spaced buckets up to 128.
-    for (unsigned i = 0; i <= 128; i++) {
+    int bucket; // Check for the 8-spaced buckets up to 64.
+    for (unsigned i = 1; i <= 64; i++) {
         // Round up when allocating.
         bucket = size_to_index_allocating(i, &rounded);
         ASSERT(bucket >= 0 && bucket < NUMBER_OF_BUCKETS);
@@ -603,15 +605,15 @@ void cmpct_test_buckets(void)
         }
         // Only rounded sizes are freed.
         if ((i & 7) == 0) {
-            // Up to size 128 we have exact buckets for each multiple of 8.
+            // Up to size 64 we have exact buckets for each multiple of 8.
             ASSERT(bucket == (unsigned)size_to_index_freeing(i));
         }
     }
-    int bucket_base = 7;
-    for (unsigned j = 16; j < 1024; j *= 2, bucket_base += 8) {
+    int bucket_base = 3;
+    for (unsigned j = 16; j < 1024; j *= 2, bucket_base += 4) {
         // Note the "<=", which ensures that we test the powers of 2 twice to ensure
         // that both ways of calculating the bucket number match.
-        for (unsigned i = j * 8; i <= j * 16; i++) {
+        for (unsigned i = j * 4; i <= j * 8; i++) {
             // Round up to j multiple in this range when allocating.
             bucket = size_to_index_allocating(i, &rounded);
             ASSERT(bucket >= 0 && bucket < NUMBER_OF_BUCKETS);
@@ -839,7 +841,7 @@ static void cmpct_test_get_back_newly_freed(cmpct_heap_t *heap)
         }
     }
     for (size_t i = ROUNDED_SMALL_ALLOCATION_LIMIT / 2; i <= ROUNDED_SMALL_ALLOCATION_LIMIT; i++) {
-        if (i <= SMALL_ALLOCATION_LIMIT) {
+        if (i <= PAGE_SIZE * 2) {
             cmpct_test_get_back_newly_freed_helper(heap, i);
         }
     }
@@ -907,7 +909,7 @@ static void cmpct_test_tagged_allocations(cmpct_heap_t *heap)
     cmpct_iterate_tagged_memory_areas(heap, &record, &record, cmpct_test_visitor_keep, 0);
     ASSERT(record.visited);  // We found the tagged allocation.
     ASSERT(record.address == alloc_3);
-    ASSERT(record.size == 120);  // 113 rounded up.
+    ASSERT(record.size == 128);  // 113 rounded up.
 
     record.visited = false;
     record.address = NULL;
@@ -997,7 +999,7 @@ static void cmpct_test_churn(cmpct_heap_t *heap)
             // Waste is rather more on 64 bit because the doubly-linked freelist
             // entries are so big.
             if (sizeof(void *) == 4) {
-                ASSERT(cmpct_get_allocated_size_impl(heap, allocations[i]) <= size * 1.06 + sizeof(free_t));
+                ASSERT(cmpct_get_allocated_size_impl(heap, allocations[i]) <= size * 1.18 + sizeof(free_t));
             }
         }
         for (size_t j = 0; j < size; j++) {
@@ -1017,8 +1019,11 @@ IRAM_ATTR static int get_bucket_for_size(cmpct_heap_t *heap, size_t size, int st
 {
     int bucket = find_nonempty_bucket(heap, start_bucket);
     if (bucket == -1) {
-        // Grow heap by a few pages. If we can.
-        int pages_needed = ROUND_UP(size + ROUNDED_SMALL_ALLOCATION_LIMIT - SMALL_ALLOCATION_LIMIT, PAGE_SIZE) >> PAGE_SIZE_SHIFT;
+        // Grow heap by a few pages.  Other heuristics mean we don't get
+        // here for allocations that are close to a page size boundary, but
+        // if we do (eg in testing) we may need a bit more space due to rounding
+        // up to bucket sizes.
+        int pages_needed = ROUND_UP(size + (PAGE_SIZE >> 2), PAGE_SIZE) >> PAGE_SIZE_SHIFT;
         if (heap_grow(heap, NULL, pages_needed) < 0) {
             unlock(heap);
             return -1;
@@ -1856,6 +1861,7 @@ void assert_heap_is_empty(cmpct_heap_t *heap)
 
 int main(int argc, char *argv[])
 {
+    cmpct_test_buckets();
     int TEST_HEAP_SIZE = 1500000;
     void *arena = malloc(TEST_HEAP_SIZE);
     cmpct_heap_t *heap = cmpct_register_impl(arena, TEST_HEAP_SIZE);
