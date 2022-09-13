@@ -1628,8 +1628,13 @@ void cmpct_get_info_impl(cmpct_heap_t *heap, multi_heap_info_t *info)
     info->total_blocks = info->free_blocks + info->allocated_blocks;
     // The implementation always takes the first part of its area for admin, so
     // it can never return an address that is lower than the end of that.
-    info->lowest_address = heap->end_of_heap_structure;
-    info->highest_address = heap->highest_address;
+    if (heap->number_of_pages != 0) {
+      info->lowest_address = heap->page_base;
+      info->highest_address = heap->page_base + heap->number_of_pages * PAGE_SIZE;
+    } else {
+      info->lowest_address = 0;
+      info->highest_address = 0;
+    }
     unlock(heap);
 }
 
