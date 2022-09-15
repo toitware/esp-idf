@@ -41,8 +41,9 @@
 #define MULTI_HEAP_LOCK(x) while(!__sync_bool_compare_and_swap(&(x), NULL, (void *)(&(x))))
 #define MULTI_HEAP_UNLOCK(x) __sync_bool_compare_and_swap(&(x), (void *)(&(x)), NULL)
 #else
-#define MULTI_HEAP_LOCK(x)
-#define MULTI_HEAP_UNLOCK(x)
+static int testing_lock = 0;
+#define MULTI_HEAP_LOCK(x) do { ASSERT(testing_lock == 0); testing_lock++; } while (false)
+#define MULTI_HEAP_UNLOCK(x) do { ASSERT(testing_lock == 1); testing_lock--; } while (false)
 #endif
 
 // For testing we just use a static variable for the current tag.
@@ -1034,6 +1035,7 @@ static void cmpct_test_churn(cmpct_heap_t *heap)
 
 #endif  // TEST_CMPCTMALLOC
 
+// Called with the lock, but unlocks on failure.
 IRAM_ATTR static int get_bucket_for_size(zone_t *zone, size_t size, int start_bucket)
 {
     int bucket = find_nonempty_bucket(zone, start_bucket);
@@ -1054,9 +1056,14 @@ IRAM_ATTR static int get_bucket_for_size(zone_t *zone, size_t size, int start_bu
     return bucket;
 }
 
+// Finds the correct zone for a given tag.  If no suitable zone exists, creates
+// the zone for that tag.  May return null for allocation failure.
+// Called with the lock, but unlocks on failure.
 IRAM_ATTR zone_t *find_zone(cmpct_heap_t *heap, void *tag)
 {
     zone_t *default_zone = &heap->default_zone;
+    if (heap->number_of_pages < 8) return default_zone;  // No space for zones.
+                                                         //
     zone_t *zone = default_zone;
     do {
         if (zone->tag == tag) return zone;
@@ -1073,8 +1080,8 @@ IRAM_ATTR zone_t *find_zone(cmpct_heap_t *heap, void *tag)
     int bucket = get_bucket_for_size(default_zone, size, start_bucket);
     if (bucket == -1) return NULL;
 
-    free_t *head = zone->free_lists[bucket];
-    zone = allocation_tail(zone, head, size, rounded_up, bucket, (void *)CMPCTMALLOC_ITERATE_TAG_HEAP_OVERHEAD);
+    free_t *head = default_zone->free_lists[bucket];
+    zone = allocation_tail(default_zone, head, size, rounded_up, bucket, (void *)CMPCTMALLOC_ITERATE_TAG_HEAP_OVERHEAD);
 
     initialize_zone(heap, zone, tag);
     zone_t *last_zone = default_zone->previous;
@@ -1102,7 +1109,6 @@ IRAM_ATTR void *cmpct_alloc(cmpct_heap_t *heap, size_t size)
     lock(heap);
 
     void *tag = GET_THREAD_LOCAL_TAG;
-
     zone_t *zone = find_zone(heap, tag);
     if (zone == NULL) return NULL;
 
@@ -1110,12 +1116,16 @@ IRAM_ATTR void *cmpct_alloc(cmpct_heap_t *heap, size_t size)
     if (bucket == -1) return NULL;
 
     free_t *head = zone->free_lists[bucket];
-    return allocation_tail(zone, head, size, rounded_up, bucket, tag);
+    void *result = allocation_tail(zone, head, size, rounded_up, bucket, tag);
+
+    unlock(heap);
+
+    return result;
 }
 
 // Takes a block on the free list, unlinks it, possibly creates a new freelist
 // entry from the excess, and returns the newly allocated memory.  On entry the
-// heap should be locked.  Unlocks the heap.
+// heap should be locked.
 IRAM_ATTR static void *allocation_tail(zone_t *zone, free_t *head, size_t size, size_t rounded_up, int bucket, void *tag)
 {
     header_t *block = &head->header;
@@ -1148,19 +1158,26 @@ IRAM_ATTR static void *allocation_tail(zone_t *zone, free_t *head, size_t size, 
     memset(result, ALLOC_FILL, size);
     memset(((char *)result) + size, PADDING_FILL, (rounded_up - size) - sizeof(header_t));
 #endif
-    unlock(zone->heap);
     return result;
 }
 
-IRAM_ATTR void cmpct_free_optionally_locked(zone_t *zone, void *payload, bool use_locking)
+IRAM_ATTR zone_t *find_zone_for_free(cmpct_heap_t *heap, void *payload)
+{
+    ssize_t page = page_number(heap, payload);
+    zone_t *zone = &heap->default_zone;
+    if (0 <= page && page < heap->number_of_pages) zone = heap->pages[page].tag_or_zone;
+    return zone;
+}
+
+IRAM_ATTR void cmpct_free_already_locked(cmpct_heap_t *heap, void *payload)
 {
     if (payload == NULL) return;
-    if (zone->heap->ignore_free) return;
+    zone_t *zone = find_zone_for_free(heap, payload);
+    if (heap->ignore_free) return;
     header_t *header = (header_t *)payload - 1;
     if (is_tagged_as_free(header)) FATAL("Invalid free");
     size_t size = get_size(header);
-    if (use_locking) lock(zone->heap);
-    zone->heap->allocated_blocks--;
+    heap->allocated_blocks--;
     header_t *left = left_header(header);
     header_t *right = right_header(header);
     if (is_tagged_as_free(left)) {
@@ -1186,27 +1203,13 @@ IRAM_ATTR void cmpct_free_optionally_locked(zone_t *zone, void *payload, bool us
             free_memory(zone, header, get_left_size(header), size);
         }
     }
-    if (use_locking) unlock(zone->heap);
-}
-
-IRAM_ATTR zone_t *find_zone_for_free(cmpct_heap_t *heap, void *payload)
-{
-    ssize_t page = page_number(heap, payload);
-    zone_t *zone = &heap->default_zone;
-    if (0 <= page && page < heap->number_of_pages) zone = heap->pages[page].tag_or_zone;
-    return zone;
 }
 
 IRAM_ATTR void cmpct_free(cmpct_heap_t *heap, void *payload)
 {
-    zone_t *zone = find_zone_for_free(heap, payload);
-    cmpct_free_optionally_locked(zone, payload, true);
-}
-
-INLINE void cmpct_free_already_locked(cmpct_heap_t *heap, void *payload)
-{
-    zone_t *zone = find_zone_for_free(heap, payload);
-    cmpct_free_optionally_locked(zone, payload, false);
+    lock(heap);
+    cmpct_free_already_locked(heap, payload);
+    unlock(heap);
 }
 
 // Get the rounded-up size of an allocation on the cmpct heap, given the
@@ -1432,7 +1435,6 @@ IRAM_ATTR void *cmpct_aligned_alloc_impl(cmpct_heap_t *heap, size_t size, size_t
     lock(heap);
 
     void *tag = GET_THREAD_LOCAL_TAG;
-
     zone_t *zone = find_zone(heap, tag);
     if (zone == NULL) return NULL;  // Out of memory.
 
@@ -1446,7 +1448,9 @@ IRAM_ATTR void *cmpct_aligned_alloc_impl(cmpct_heap_t *heap, size_t size, size_t
     size_t size_with_header = size + sizeof(header_t);
     if (location == first_possible_location) {
         // Luckily already aligned.
-        return allocation_tail(zone, head, size, size_with_header, bucket, tag);
+        void *result = allocation_tail(zone, head, size, size_with_header, bucket, tag);
+        unlock(heap);
+        return result;
     }
     while (location - first_possible_location < sizeof(free_t)) {
         // No space for the free list header.
@@ -1467,7 +1471,9 @@ IRAM_ATTR void *cmpct_aligned_alloc_impl(cmpct_heap_t *heap, size_t size, size_t
 
     // Create the allocation from the aligned area, possibly freeing the excess
     // on the right.
-    return allocation_tail(zone, (free_t *)aligned_header, size, size_with_header, size_to_index_freeing(aligned_part_size - sizeof(header_t)), tag);
+    void *result = allocation_tail(zone, (free_t *)aligned_header, size, size_with_header, size_to_index_freeing(aligned_part_size - sizeof(header_t)), tag);
+    unlock(heap);
+    return result;
 }
 
 IRAM_ATTR static bool is_page_allocated(cmpct_heap_t *heap, void *p)
@@ -1757,6 +1763,7 @@ IRAM_ATTR static void *page_alloc(cmpct_heap_t *heap, intptr_t pages, uintptr_t 
                 heap->pages[i].tag_or_zone = tag_or_zone;
                 for (int j = 1; j < pages; j++) {
                     heap->pages[i + j].status = PAGE_CONTINUED;
+                    heap->pages[i + j].tag_or_zone = tag_or_zone;
                 }
                 void *result = heap->page_base + i * PAGE_SIZE;
                 for (int i = 0; i < pages << PAGE_SIZE_SHIFT; i += sizeof(int)) {
