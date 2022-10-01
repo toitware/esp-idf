@@ -291,7 +291,7 @@ esp_err_t sdspi_host_set_card_clk(sdspi_dev_handle_t handle, uint32_t freq_khz)
     return configure_spi_dev(slot, freq_khz * 1000);
 }
 
-static void gpio_intr(void* arg)
+IRAM_ATTR void gpio_intr(void* arg)
 {
     BaseType_t awoken = pdFALSE;
     slot_info_t* slot = (slot_info_t*)arg;
