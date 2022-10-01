@@ -449,7 +449,9 @@ esp_err_t gpio_install_isr_service(int intr_alloc_flags)
     GPIO_CHECK(gpio_context.gpio_isr_func == NULL, "GPIO isr service already installed", ESP_ERR_INVALID_STATE);
     esp_err_t ret;
     portENTER_CRITICAL(&gpio_context.gpio_spinlock);
-    gpio_context.gpio_isr_func = (gpio_isr_func_t *) calloc(GPIO_NUM_MAX, sizeof(gpio_isr_func_t));
+    // If this is not allocated explicitly in internal memory it might end up in PSRAM.
+    // This causes errors if the ISR runs when the cache is disabled
+    gpio_context.gpio_isr_func = (gpio_isr_func_t *) heap_caps_malloc(GPIO_NUM_MAX * sizeof(gpio_isr_func_t), MALLOC_CAP_INTERNAL);
     portEXIT_CRITICAL(&gpio_context.gpio_spinlock);
     if (gpio_context.gpio_isr_func == NULL) {
         ret = ESP_ERR_NO_MEM;
