@@ -1756,7 +1756,9 @@ void cmpct_set_option(cmpct_heap_t *heap, int option, void *value)
 {
     if (option == MALLOC_OPTION_THREAD_TAG) {
 #if !defined(TEST_CMPCTMALLOC) && !defined(CMPCTMALLOC_ON_LINUX)
+#if __XTENSA__
         first_allocations = false;
+#endif
         assert(MULTI_HEAP_THREAD_TAG_INDEX < configNUM_THREAD_LOCAL_STORAGE_POINTERS);
         vTaskSetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX, value);
 #else
