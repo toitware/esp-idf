@@ -80,6 +80,31 @@ typedef struct {
     };
 } rmt_config_t;
 
+#if SOC_RMT_SUPPORT_TX_LOOP_COUNT
+#define RMT_DEFAULT_CONFIG_TX_                   \
+    {                                            \
+        .carrier_freq_hz = 38000,                \
+        .carrier_level = RMT_CARRIER_LEVEL_HIGH, \
+        .idle_level = RMT_IDLE_LEVEL_LOW,        \
+        .carrier_duty_percent = 33,              \
+        .loop_count = 0,                         \
+        .carrier_en = false,                     \
+        .loop_en = false,                        \
+        .idle_output_en = true,                  \
+    }
+#else
+#define RMT_DEFAULT_CONFIG_TX_                   \
+    {                                            \
+        .carrier_freq_hz = 38000,                \
+        .carrier_level = RMT_CARRIER_LEVEL_HIGH, \
+        .idle_level = RMT_IDLE_LEVEL_LOW,        \
+        .carrier_duty_percent = 33,              \
+        .carrier_en = false,                     \
+        .loop_en = false,                        \
+        .idle_output_en = true,                  \
+    }
+#endif // SOC_RMT_SUPPORT_TX_LOOP_COUNT
+
 /**
  * @brief Default configuration for Tx channel
  *
@@ -92,16 +117,29 @@ typedef struct {
         .clk_div = 80,                               \
         .mem_block_num = 1,                          \
         .flags = 0,                                  \
-        .tx_config = {                               \
-            .carrier_freq_hz = 38000,                \
-            .carrier_level = RMT_CARRIER_LEVEL_HIGH, \
-            .idle_level = RMT_IDLE_LEVEL_LOW,        \
-            .carrier_duty_percent = 33,              \
-            .carrier_en = false,                     \
-            .loop_en = false,                        \
-            .idle_output_en = true,                  \
-        }                                            \
+        .tx_config = RMT_DEFAULT_CONFIG_TX_,         \
     }
+
+#if SOC_RMT_SUPPORT_RX_DEMODULATION
+#define RMT_DEFAULT_CONFIG_RX_                   \
+     {                                           \
+        .idle_threshold = 12000,                 \
+        .filter_ticks_thresh = 100,              \
+        .filter_en = true,                       \
+        .rm_carrier = false,                     \
+        .carrier_freq_hz = 0,                    \
+        .carrier_duty_percent = 0,               \
+        .carrier_level = RMT_CARRIER_LEVEL_HIGH, \
+    }
+#else
+#define RMT_DEFAULT_CONFIG_RX_       \
+    {                                \
+        .idle_threshold = 12000,     \
+        .filter_ticks_thresh = 100,  \
+        .filter_en = true,           \
+    }
+#endif // SOC_RMT_SUPPORT_RX_DEMODULATION
+
 
 /**
  * @brief Default configuration for RX channel
@@ -115,11 +153,7 @@ typedef struct {
         .clk_div = 80,                          \
         .mem_block_num = 1,                     \
         .flags = 0,                             \
-        .rx_config = {                          \
-            .idle_threshold = 12000,            \
-            .filter_ticks_thresh = 100,         \
-            .filter_en = true,                  \
-        }                                       \
+        .rx_config = RMT_DEFAULT_CONFIG_RX_,    \
     }
 
 /**
