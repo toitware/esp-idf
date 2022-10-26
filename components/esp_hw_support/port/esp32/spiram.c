@@ -163,7 +163,7 @@ esp_err_t esp_spiram_init(void)
     r = psram_enable(PSRAM_SPEED, PSRAM_MODE);
     if (r != ESP_OK) {
 #if CONFIG_SPIRAM_IGNORE_NOTFOUND
-        ESP_EARLY_LOGE(TAG, "SPI RAM enabled but initialization failed. Bailing out.");
+        ESP_EARLY_LOGE(TAG, "SPI RAM supported, but not found.");
 #endif
         return r;
     }
