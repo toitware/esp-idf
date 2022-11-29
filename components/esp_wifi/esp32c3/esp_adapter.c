@@ -90,6 +90,8 @@ wifi_static_queue_t* wifi_create_queue( int queue_len, int item_size)
     wifi_static_queue_t *queue = NULL;
 
     queue = (wifi_static_queue_t*)heap_caps_malloc(sizeof(wifi_static_queue_t), MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT);
+    heap_caps_set_option(MALLOC_OPTION_THREAD_TAG, old);
+
     if (!queue) {
         return NULL;
     }
