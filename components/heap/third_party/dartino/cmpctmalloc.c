@@ -913,6 +913,14 @@ static void cmpct_test_tagged_allocations(cmpct_heap_t *heap)
     record.address = NULL;
     record.size = 0;
 
+    // Check that the tag changed after realloc.
+    cmpct_set_option(heap, MALLOC_OPTION_THREAD_TAG, &record + 1);  // Allocations now tagged with a different pointer.
+    alloc_3 = cmpct_realloc_impl(heap, alloc_3, 113);  // Realloc of same size, so nothing is moved.
+    cmpct_iterate_tagged_memory_areas(heap, &record, &record, cmpct_test_visitor_keep, 0);
+    ASSERT(!record.visited);  // We didn't find it because the realloc changed the tag.
+    cmpct_set_option(heap, MALLOC_OPTION_THREAD_TAG, &record);  // Set the current malloc tag back.
+    alloc_3 = cmpct_realloc_impl(heap, alloc_3, 113);  // Reset the tag on the allocation.
+
     // Use flag so all allocations are iterated over, but the callback ignores those
     // with a null tag.
     cmpct_iterate_tagged_memory_areas(heap, &record, NULL, cmpct_test_visitor_keep, CMPCTMALLOC_ITERATE_ALL_ALLOCATIONS);
@@ -936,8 +944,16 @@ static void cmpct_test_tagged_allocations(cmpct_heap_t *heap)
     cmpct_iterate_tagged_memory_areas(heap, &record, &record, cmpct_test_visitor_keep, 0);
     ASSERT(record.visited);  // It was found.
     ASSERT(record.size == PAGE_SIZE * 2);
-
     record.visited = false;
+
+    // Check that the tag changed after realloc.
+    cmpct_set_option(heap, MALLOC_OPTION_THREAD_TAG, &record + 1);  // Allocations now tagged with a different pointer.
+    alloc_1 = cmpct_realloc_impl(heap, alloc_1, PAGE_SIZE * 2);  // Realloc of same size, so nothing is moved.
+    cmpct_iterate_tagged_memory_areas(heap, &record, &record, cmpct_test_visitor_keep, 0);
+    ASSERT(!record.visited);  // We didn't find it because the realloc changed the tag.
+    cmpct_set_option(heap, MALLOC_OPTION_THREAD_TAG, &record);  // Set the current malloc tag back.
+    alloc_1 = cmpct_realloc_impl(heap, alloc_1, PAGE_SIZE * 2);  // Reset the tag on the allocation.
+
     cmpct_iterate_tagged_memory_areas(heap, &record, &record, cmpct_test_visitor_keep, 0);
     ASSERT(record.visited);  // Still found (not freed by the keep callback).
 
@@ -1146,6 +1162,13 @@ IRAM_ATTR static size_t allocation_size(void *payload)
     header_t *header = (header_t *)payload - 1;
     size_t size = get_size(header) - sizeof(header_t);
     return size;
+}
+
+// Set the accounting tag of an existing allocation.
+IRAM_ATTR static void set_tag(void *payload, void *tag)
+{
+    header_t *header = (header_t *)payload - 1;
+    header->tag = tag;
 }
 
 // Each allocation area has an arena structure at the start to link them
@@ -1441,7 +1464,7 @@ IRAM_ATTR static void *page_grow_allocation(cmpct_heap_t *heap, void *p, size_t 
     for (size_t j = new_page + 1; j < new_page + new_pages; j++) {
         heap->pages[j].status = PAGE_CONTINUED;
     }
-    /* Adjust the heap accounting.  */
+    /* Adjust the heap accounting for number of contiguous blocks.  */
     if (new_page != old_page &&
         (new_page == 0 || heap->pages[new_page - 1].status != PAGE_FREE)) {
         heap->free_blocks--;
@@ -1462,7 +1485,7 @@ IRAM_ATTR static void *page_grow_allocation(cmpct_heap_t *heap, void *p, size_t 
 /* Attempts to grow the current page-based allocation into adjacent pages
    or shrink the current page-based allocation without moving data.
    Called with the lock.  */
-IRAM_ATTR static void *realloc_page_allocation(cmpct_heap_t *heap, void *p, size_t size, size_t old_size)
+IRAM_ATTR static void *realloc_page_allocation_helper(cmpct_heap_t *heap, void *p, size_t size, size_t old_size)
 {
     size_t new_pages = ROUND_UP(size, PAGE_SIZE) >> PAGE_SIZE_SHIFT;
     size_t old_pages = old_size >> PAGE_SIZE_SHIFT;
@@ -1497,6 +1520,19 @@ IRAM_ATTR static void *realloc_page_allocation(cmpct_heap_t *heap, void *p, size
     }
 }
 
+/* Attempts to grow the current page-based allocation into adjacent pages
+   or shrink the current page-based allocation without moving data.
+   Called with the lock.  */
+IRAM_ATTR static void *realloc_page_allocation(cmpct_heap_t *heap, void *p, size_t size, size_t old_size)
+{
+    void *result = realloc_page_allocation_helper(heap, p, size, old_size);
+    if (result == NULL) return NULL;
+    // On a successful realloc, set the accounting tag to the current value.
+    void *tag = GET_THREAD_LOCAL_TAG;
+    heap->pages[page_number(heap, p)].tag = tag;
+    return result;
+}
+
 /* This realloc implementation always first tries to create a new allocation
    and copy the data.  There are so few chances to defragment a malloc heap
    that we will try to move the data when we can.
@@ -1505,7 +1541,11 @@ IRAM_ATTR static void *realloc_page_allocation(cmpct_heap_t *heap, void *p, size
    enough.
 
    For large (page-based) failing reallocations we attempt a new allocation
-   that overlaps with the old one.  */
+   that overlaps with the old one.
+
+   A successful realloc will always set the accounting tag of the allocation,
+   regardless of whether the allocation is actually moved.
+   */
 IRAM_ATTR void *cmpct_realloc_impl(cmpct_heap_t *heap, void *p, size_t size)
 {
     if (!size) {
@@ -1522,8 +1562,11 @@ IRAM_ATTR void *cmpct_realloc_impl(cmpct_heap_t *heap, void *p, size_t size)
         cmpct_free_impl(heap, p);
         return new_allocation;
     }
+    // New allocation failed.
     if (is_page_allocated(heap, p)) {
         lock(heap);
+        // Although the new allocation failed we may be able to shrink or grow
+        // the original page-based allocation.
         void *result = realloc_page_allocation(heap, p, size, old_size);
         unlock(heap);
         return result;
@@ -1536,6 +1579,7 @@ IRAM_ATTR void *cmpct_realloc_impl(cmpct_heap_t *heap, void *p, size_t size)
                Since the old_size is often larger than the original requested
                allocation we may hit this case even when growing the
                allocation.  */
+            set_tag(p, GET_THREAD_LOCAL_TAG);
             return p;
         }
         return NULL;
