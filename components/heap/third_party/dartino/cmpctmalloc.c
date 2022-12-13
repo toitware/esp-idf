@@ -1485,7 +1485,7 @@ IRAM_ATTR static void *page_grow_allocation(cmpct_heap_t *heap, void *p, size_t 
 /* Attempts to grow the current page-based allocation into adjacent pages
    or shrink the current page-based allocation without moving data.
    Called with the lock.  */
-IRAM_ATTR static void *realloc_page_allocation_helper(cmpct_heap_t *heap, void *p, size_t size, size_t old_size)
+IRAM_ATTR static void *realloc_page_allocation(cmpct_heap_t *heap, void *p, size_t size, size_t old_size)
 {
     size_t new_pages = ROUND_UP(size, PAGE_SIZE) >> PAGE_SIZE_SHIFT;
     size_t old_pages = old_size >> PAGE_SIZE_SHIFT;
@@ -1518,19 +1518,6 @@ IRAM_ATTR static void *realloc_page_allocation_helper(cmpct_heap_t *heap, void *
         heap->remaining += (old_pages - new_pages) << PAGE_SIZE_SHIFT;
         return p;
     }
-}
-
-/* Attempts to grow the current page-based allocation into adjacent pages
-   or shrink the current page-based allocation without moving data.
-   Called with the lock.  */
-IRAM_ATTR static void *realloc_page_allocation(cmpct_heap_t *heap, void *p, size_t size, size_t old_size)
-{
-    void *result = realloc_page_allocation_helper(heap, p, size, old_size);
-    if (result == NULL) return NULL;
-    // On a successful realloc, set the accounting tag to the current value.
-    void *tag = GET_THREAD_LOCAL_TAG;
-    heap->pages[page_number(heap, p)].tag = tag;
-    return result;
 }
 
 /* This realloc implementation always first tries to create a new allocation
@@ -1568,6 +1555,11 @@ IRAM_ATTR void *cmpct_realloc_impl(cmpct_heap_t *heap, void *p, size_t size)
         // Although the new allocation failed we may be able to shrink or grow
         // the original page-based allocation.
         void *result = realloc_page_allocation(heap, p, size, old_size);
+        if (result != NULL) {
+            // On a successful realloc, set the accounting tag to the current value.
+            void *tag = GET_THREAD_LOCAL_TAG;
+            heap->pages[page_number(heap, p)].tag = tag;
+        }
         unlock(heap);
         return result;
     } else {
