@@ -14,7 +14,7 @@
 #include "multi_heap.h"
 #include "multi_heap_internal.h"
 
-#if !CONFIG_HEAP_TLSF_USE_ROM_IMPL
+#if !CONFIG_HEAP_TLSF_USE_ROM_IMPL && !CONFIG_CMPCT_MALLOC_HEAP
 #include "tlsf.h"
 #include "tlsf_block_functions.h"
 #endif
@@ -26,7 +26,7 @@
 /* Defines compile-time configuration macros */
 #include "multi_heap_config.h"
 
-#if (!defined MULTI_HEAP_POISONING) && (!defined CONFIG_HEAP_TLSF_USE_ROM_IMPL)
+#if (!defined MULTI_HEAP_POISONING) && (!defined CONFIG_HEAP_TLSF_USE_ROM_IMPL) && (!defined CONFIG_CMPCT_MALLOC_HEAP)
 /* if no heap poisoning, public API aliases directly to these implementations */
 void *multi_heap_malloc(multi_heap_handle_t heap, size_t size)
     __attribute__((alias("multi_heap_malloc_impl")));
@@ -66,6 +66,20 @@ void *multi_heap_get_block_owner(multi_heap_block_handle_t block)
     return NULL;
 }
 
+void multi_heap_set_option(multi_heap_handle_t heap, int option, void *value)
+{
+}
+
+void *multi_heap_get_option(int option)
+{
+    return NULL;
+}
+
+void multi_heap_iterate_tagged_memory_areas(multi_heap_handle_t heap, void *user_data, void *tag, tagged_memory_callback_t callback, uint32_t flags)
+{
+}
+
+
 #endif
 
 #define ALIGN(X) ((X) & ~(sizeof(void *)-1))
@@ -103,7 +117,7 @@ void multi_heap_in_rom_init(void)
     multi_heap_os_funcs_init(&multi_heap_os_funcs);
 }
 
-#else // CONFIG_HEAP_TLSF_USE_ROM_IMPL
+#elif !defined(CONFIG_CMPCT_MALLOC_HEAP)
 
 /* Check a block is valid for this heap. Used to verify parameters. */
 __attribute__((noinline)) NOCLONE_ATTR static void assert_valid_block(const heap_t *heap, const block_header_t *block)
