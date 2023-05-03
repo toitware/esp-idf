@@ -12,6 +12,10 @@ set(srcs "heap_caps_base.c"
          "heap_caps_init.c"
          "multi_heap.c")
 
+if(CONFIG_CMPCT_MALLOC_HEAP)
+    list(APPEND srcs "third_party/dartino/cmpctmalloc.c")
+endif()
+
 # the root dir of TLSF submodule contains headers with static inline
 # functions used in the esp_rom component for TLSF patches. Therefore,
 # the tlsf/ dir must be included in the list of public includes.
@@ -24,8 +28,12 @@ set(includes "include"
 # component perspective
 set(priv_includes "tlsf/include")
 
-if(NOT CONFIG_HEAP_TLSF_USE_ROM_IMPL)
-    list(APPEND srcs "tlsf/tlsf.c")
+if(NOT CONFIG_CMPCT_MALLOC_HEAP)
+    list(APPEND srcs "multi_heap.c")
+
+    if(NOT CONFIG_HEAP_TLSF_USE_ROM_IMPL)
+        list(APPEND srcs "tlsf/tlsf.c")
+    endif()
 endif()
 
 if(NOT CONFIG_HEAP_POISONING_DISABLED)
