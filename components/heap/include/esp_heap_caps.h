@@ -97,6 +97,22 @@ __attribute__((weak)) HEAP_IRAM_ATTR void esp_heap_trace_free_hook(void* ptr);
 #define MALLOC_OPTION_THREAD_TAG   1 /// The tag value to be attached to future allocations in this thread.
 
 /**
+ * Flags for heap_caps_iterate_tagged_memory_areas.
+ */
+#define MALLOC_ITERATE_UNLOCKED        (1<<0) /// Dangerous options for use in a crash handler only - avoid deadlocks by not using locking.
+#define MALLOC_ITERATE_ALL_ALLOCATIONS (1<<1) /// Iterate all allocations, not just the ones where the tag matches.
+#define MALLOC_ITERATE_UNALLOCATED     (1<<2) /// Call back for free areas.  Tags are as follows for this:
+
+#define MALLOC_ITERATE_TAG_FREE          (-1)  /// Memory is free and could be allocated.
+#define MALLOC_ITERATE_TAG_HEAP_OVERHEAD (-2)  /// Memory is used by malloc for internal accounting etc.
+
+/**
+ * Options for heap_caps_set_option and heap_caps_get_option.
+ */
+#define MALLOC_OPTION_DISABLE_FREE 0 /// Value is false (null) or true (non-null).  Calls to free are ignored.
+#define MALLOC_OPTION_THREAD_TAG   1 /// The tag value to be attached to future allocations in this thread.
+
+/**
  * @brief Allocate a chunk of memory which has the given capabilities
  *
  * Equivalent semantics to libc malloc(), for capability-aware memory.
