@@ -417,7 +417,7 @@ static void do_secondary_init(void)
 #endif
 }
 
-static void start_cpu0_default(void)
+void start_cpu0_default(void)
 {
 
     ESP_EARLY_LOGI(TAG, "Pro cpu start user code");
