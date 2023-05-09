@@ -59,7 +59,7 @@
 
 [submodule "components/mbedtls/mbedtls"]
 	path = components/mbedtls/mbedtls
-	url = ../../espressif/mbedtls.git
+	url = ../../toitlang/mbedtls.git
 
 [submodule "components/lwip/lwip"]
 	path = components/lwip/lwip
