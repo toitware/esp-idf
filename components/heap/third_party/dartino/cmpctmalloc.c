@@ -145,6 +145,12 @@ static int first_allocations = true;
 #define ROUND_UP(x, alignment) (((x) + (alignment) - 1) & ~((alignment) - 1))
 #define ROUND_DOWN(x, alignment) ((x) & ~((alignment) - 1))
 #define IS_ALIGNED(x, alignment) (((x) & ((alignment) - 1)) == 0)
+#ifdef MIN
+#undef MIN
+#endif
+#ifdef MAX
+#undef MAX
+#endif
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 // Provoke crash.  Often because of a double free.
