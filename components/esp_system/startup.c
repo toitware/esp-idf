@@ -197,7 +197,7 @@ static void do_secondary_init(void)
 #endif
 }
 
-static void start_cpu0_default(void)
+void start_cpu0_default(void)
 {
     // Initialize core components and services.
     do_core_init();
