@@ -11,7 +11,6 @@ set(includes "include")
 
 if(NOT CONFIG_CMPCT_MALLOC_HEAP)
     list(APPEND srcs "multi_heap.c")
-    list(APPEND srcs "heap_tlsf.c")
 
     if(NOT CONFIG_HEAP_TLSF_USE_ROM_IMPL)
         set(priv_includes "tlsf")
