@@ -38,6 +38,7 @@
 #include "ap/ieee802_1x.h"
 #include "ap/sta_info.h"
 #include "wps/wps_defs.h"
+#include "wps/wps.h"
 
 const wifi_osi_funcs_t *wifi_funcs;
 struct wpa_funcs *wpa_cb;
@@ -128,7 +129,7 @@ bool  wpa_attach(void)
     ret = wpa_sm_init(NULL, wpa_sendto_wrapper,
                  wpa_config_assoc_ie, wpa_install_key, wpa_get_key, wpa_deauthenticate, wpa_neg_complete);
     if(ret) {
-        ret = (esp_wifi_register_tx_cb_internal(eapol_txcb, WIFI_TXCB_EAPOL_ID) == ESP_OK);
+        ret = (esp_wifi_register_eapol_txdonecb_internal(eapol_txcb) == ESP_OK);
     }
     esp_set_scan_ie();
     return ret;
@@ -189,6 +190,7 @@ bool  wpa_deattach(void)
     if (sm->wpa_sm_wps_disable) {
         sm->wpa_sm_wps_disable();
     }
+    esp_wifi_register_eapol_txdonecb_internal(NULL);
 
     wpa_sm_deinit();
     return true;
@@ -277,6 +279,13 @@ static int check_n_add_wps_sta(struct hostapd_data *hapd, struct sta_info *sta_i
     /* Condition for this, WPS is running and WPS IEs are part of assoc req */
     if (!wps_ie || (wps_type == WPS_TYPE_DISABLE)) {
         return 0;
+    }
+
+    if (wps_type == WPS_TYPE_PBC) {
+        if (esp_wps_registrar_check_pbc_overlap(hapd->wps)) {
+            wpa_printf(MSG_DEBUG, "WPS: PBC session overlap detected");
+            return -1;
+        }
     }
 
     sta_info->wps_ie = wps_ie;

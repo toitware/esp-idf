@@ -792,7 +792,7 @@ usb_dfu_force_detach = 0x40002a54;
 usb_dev_deinit = 0x40002a60;
 usb_dw_ctrl_deinit = 0x40002a6c;
 /* Data (.data, .bss, .rodata) */
-s_usb_osglue = 0x3fceffac;
+rom_usb_osglue = 0x3fceffac;
 
 
 /***************************************
@@ -1996,7 +1996,7 @@ rcampduuprate = 0x4000573c;
 rcClearCurAMPDUSched = 0x40005748;
 rcClearCurSched = 0x40005754;
 rcClearCurStat = 0x40005760;
-rcGetSched = 0x4000576c;
+/*rcGetSched = 0x4000576c;*/
 rcLowerSched = 0x40005778;
 rcSetTxAmpduLimit = 0x40005784;
 /* rcTxUpdatePer = 0x40005790;*/
