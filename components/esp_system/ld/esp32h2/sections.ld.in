@@ -413,6 +413,7 @@ SECTIONS
 
   .flash.rodata_noload (NOLOAD) :
   {
+    . += _esp_rodata_section_padding;
     . = ALIGN (4);
     mapping[rodata_noload]
   } > default_rodata_seg

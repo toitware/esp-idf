@@ -125,3 +125,12 @@ config SPIRAM_ECC_ENABLE
         Enable MSPI Error-Correcting Code function when accessing SPIRAM.
 
         If enabled, 1/16 of the SPI RAM total size will be reserved for error-correcting code.
+
+config SPIRAM_RODATA_PADDING
+  int "Add this much padding to the drom/rodata section before the MMU starts moving data around"
+  default 0
+  range 0 8388608
+  help
+      Adds padding to the DROM data, so that there is a gap between the end of the DROM and the start of bss/data
+      sections. This enables the DROM to be rewritten by an outside entity, as long as the DROM section does not
+      increase more than this padding.
