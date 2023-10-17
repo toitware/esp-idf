@@ -414,6 +414,7 @@ SECTIONS
      * driver to maintain the virtual address.
      * NOLOAD rodata may not be included in this section.
      */
+    . += _esp_rodata_section_padding;
     _rodata_reserved_end = ADDR(.flash.tbss);
 
     mapping[rodata_noload]
