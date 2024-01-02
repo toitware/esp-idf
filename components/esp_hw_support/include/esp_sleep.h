@@ -194,10 +194,13 @@ bool esp_sleep_is_valid_wakeup_gpio(gpio_num_t gpio_num);
  *       configured in esp_deep_sleep_start/esp_light_sleep_start,
  *       immediately before entering sleep mode.
  *
- * @note On ESP32, ext0 wakeup source can not be used together with touch or ULP wakeup sources.
+ * @note ESP32: ext0 wakeup source can not be used together with touch or ULP wakeup sources.
  *
- * @param gpio_num  GPIO number used as wakeup source. Only GPIOs which are have RTC
- *             functionality can be used: 0,2,4,12-15,25-27,32-39.
+ * @param gpio_num  GPIO number used as wakeup source. Only GPIOs with the RTC
+ *             functionality can be used. For different SoCs, the related GPIOs are:
+ *                - ESP32: 0, 2, 4, 12-15, 25-27, 32-39
+ *                - ESP32-S2: 0-21
+ *                - ESP32-S3: 0-21
  * @param level  input level which will trigger wakeup (0=low, 1=high)
  * @return
  *      - ESP_OK on success
@@ -227,8 +230,13 @@ esp_err_t esp_sleep_enable_ext0_wakeup(gpio_num_t gpio_num, int level);
  *       kept enabled using esp_sleep_pd_config function.
  *
  * @param mask  bit mask of GPIO numbers which will cause wakeup. Only GPIOs
- *              which have RTC functionality can be used in this bit map:
- *              0,2,4,12-15,25-27,32-39.
+ *              which have RTC functionality can be used in this bit map.
+ *              For different SoCs, the related GPIOs are:
+ *                - ESP32: 0, 2, 4, 12-15, 25-27, 32-39
+ *                - ESP32-S2: 0-21
+ *                - ESP32-S3: 0-21
+ *                - ESP32-C6: 0-7
+ *                - ESP32-H2: 7-14
  * @param mode select logic function used to determine wakeup condition:
  *            - ESP_EXT1_WAKEUP_ALL_LOW: wake up when all selected GPIOs are low
  *            - ESP_EXT1_WAKEUP_ANY_HIGH: wake up when any of the selected GPIOs is high
@@ -250,9 +258,13 @@ esp_err_t esp_sleep_enable_ext1_wakeup(uint64_t mask, esp_sleep_ext1_wakeup_mode
  * @note This function does not modify pin configuration. The pins are
  *       configured inside esp_deep_sleep_start, immediately before entering sleep mode.
  *
- * @note You don't need to care to pull-up or pull-down before using this
- *       function, because this will be set internally in esp_deep_sleep_start
- *       based on the wakeup mode. BTW, when you use low level to wake up the
+ * @note You don't need to worry about pull-up or pull-down resistors before
+ *       using this function because the ESP_SLEEP_GPIO_ENABLE_INTERNAL_RESISTORS
+ *       option is enabled by default. It will automatically set pull-up or pull-down
+ *       resistors internally in esp_deep_sleep_start based on the wakeup mode. However,
+ *       when using external pull-up or pull-down resistors, please be sure to disable
+ *       the ESP_SLEEP_GPIO_ENABLE_INTERNAL_RESISTORS option, as the combination of internal
+ *       and external resistors may cause interference. BTW, when you use low level to wake up the
  *       chip, we strongly recommend you to add external resistors (pull-up).
  *
  * @param gpio_pin_mask  Bit mask of GPIO numbers which will cause wakeup. Only GPIOs

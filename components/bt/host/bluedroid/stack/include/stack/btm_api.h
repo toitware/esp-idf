@@ -810,6 +810,15 @@ typedef struct {
     UINT8       hci_status;
 } tBTM_SET_AFH_CHANNELS_RESULTS;
 
+/* Structure returned with set ACL packet types event (in tBTM_CMPL_CB callback function)
+** in response to BTM_SetAclPktTypes call.
+*/
+typedef struct {
+    tBTM_STATUS status;
+    BD_ADDR     rem_bda;
+    UINT16      pkt_types;
+} tBTM_SET_ACL_PKT_TYPES_RESULTS;
+
 /* Structure returned with set BLE channels event (in tBTM_CMPL_CB callback function)
 ** in response to BTM_BleSetChannels call.
 */
@@ -1061,6 +1070,17 @@ enum {
     BTM_SCO_DATA_PAR_LOST
 };
 typedef UINT8 tBTM_SCO_DATA_FLAG;
+
+/* Count the number of SCO Data Packet Status */
+typedef struct {
+    UINT32 rx_total;
+    UINT32 rx_correct;
+    UINT32 rx_err;
+    UINT32 rx_none;
+    UINT32 rx_lost;
+    UINT32 tx_total;
+    UINT32 tx_discarded;
+} tBTM_SCO_PKT_STAT_NUMS;
 
 /***************************
 **  SCO Callback Functions
@@ -1766,6 +1786,7 @@ typedef union {
 #if BLE_INCLUDED == TRUE && SMP_INCLUDED == TRUE
     tBTM_LE_COMPLT      complt;     /* BTM_LE_COMPLT_EVT      */
     tSMP_OOB_DATA_TYPE  req_oob_type;
+    tSMP_LOC_OOB_DATA   local_oob_data;
 #endif
     tBTM_LE_KEY         key;
 } tBTM_LE_EVT_DATA;
@@ -2192,6 +2213,20 @@ UINT8 BTM_SetTraceLevel (UINT8 new_level);
 *******************************************************************************/
 //extern
 tBTM_STATUS BTM_WritePageTimeout(UINT16 timeout);
+
+/*******************************************************************************
+**
+** Function         BTM_SetAclPktTypes
+**
+** Description      Send HCI Change Connection Packet Type
+**
+** Returns
+**      BTM_SUCCESS         Command sent.
+**      BTM_NO_RESOURCES    If out of resources to send the command.
+**
+*******************************************************************************/
+//extern
+tBTM_STATUS BTM_SetAclPktTypes(BD_ADDR remote_bda, UINT16 pkt_types, tBTM_CMPL_CB *p_cb);
 
 /*******************************************************************************
 **
@@ -4000,6 +4035,22 @@ tBTM_EIR_SEARCH_RESULT BTM_HasInquiryEirService( tBTM_INQ_RESULTS *p_results,
 
 /*******************************************************************************
 **
+** Function         BTM_HasCustomEirService
+**
+** Description      This function is called to know if UUID is already in custom
+**                  UUID list.
+**
+** Parameters       custom_uuid - pointer to custom_uuid array in tBTA_DM_CB
+**                  uuid - UUID struct
+**
+** Returns          TRUE - if found
+**                  FALSE - if not found
+**
+*******************************************************************************/
+BOOLEAN BTM_HasCustomEirService( tBT_UUID *custom_uuid, tBT_UUID uuid );
+
+/*******************************************************************************
+**
 ** Function         BTM_AddEirService
 **
 ** Description      This function is called to add a service in bit map of UUID list.
@@ -4015,6 +4066,20 @@ void BTM_AddEirService( UINT32 *p_eir_uuid, UINT16 uuid16 );
 
 /*******************************************************************************
 **
+** Function         BTM_AddCustomEirService
+**
+** Description      This function is called to add a custom UUID.
+**
+** Parameters       custom_uuid - pointer to custom_uuid array in tBTA_DM_CB
+**                  uuid - UUID struct
+**
+** Returns          None
+**
+*******************************************************************************/
+void BTM_AddCustomEirService(tBT_UUID *custom_uuid, tBT_UUID uuid);
+
+/*******************************************************************************
+**
 ** Function         BTM_RemoveEirService
 **
 ** Description      This function is called to remove a service in bit map of UUID list.
@@ -4027,6 +4092,20 @@ void BTM_AddEirService( UINT32 *p_eir_uuid, UINT16 uuid16 );
 *******************************************************************************/
 //extern
 void BTM_RemoveEirService( UINT32 *p_eir_uuid, UINT16 uuid16 );
+
+/*******************************************************************************
+**
+** Function         BTM_RemoveCustomEirService
+**
+** Description      This function is called to remove a a custom UUID.
+**
+** Parameters       custom_uuid - pointer to custom_uuid array in tBTA_DM_CB
+                    uuid - UUID struct
+**
+** Returns          None
+**
+*******************************************************************************/
+void BTM_RemoveCustomEirService(tBT_UUID *custom_uuid, tBT_UUID uuid);
 
 /*******************************************************************************
 **
@@ -4188,6 +4267,17 @@ tBTM_STATUS BTM_SetAfhChannels (AFH_CHANNELS channels, tBTM_CMPL_CB *p_afh_chann
 **
 *******************************************************************************/
 tBTM_STATUS BTM_BleSetChannels (BLE_CHANNELS channels, tBTM_CMPL_CB *p_ble_channels_cmpl_cback);
+
+/*******************************************************************************
+**
+** Function         BTM_PktStatNumsGet
+**
+** Description      This function is called to get the number of packet status struct
+**
+** Returns          void
+**
+*******************************************************************************/
+void BTM_PktStatNumsGet(UINT16 sync_conn_handle, tBTM_SCO_PKT_STAT_NUMS *pkt_nums);
 
 #ifdef __cplusplus
 }

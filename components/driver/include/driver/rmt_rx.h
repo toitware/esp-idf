@@ -40,6 +40,8 @@ typedef struct {
         uint32_t with_dma: 1;     /*!< If set, the driver will allocate an RMT channel with DMA capability */
         uint32_t io_loop_back: 1; /*!< For debug/test, the signal output from the GPIO will be fed to the input path as well */
     } flags;                      /*!< RX channel config flags */
+    int intr_priority;            /*!< RMT interrupt priority,
+                                       if set to 0, the driver will try to allocate an interrupt with a relative low priority (1,2,3) */
 } rmt_rx_channel_config_t;
 
 /**
@@ -70,6 +72,8 @@ esp_err_t rmt_new_rx_channel(const rmt_rx_channel_config_t *config, rmt_channel_
  *
  * @note This function is non-blocking, it initiates a new receive job and then returns.
  *       User should check the received data from the `on_recv_done` callback that registered by `rmt_rx_register_event_callbacks()`.
+ * @note This function can also be called in ISR context.
+ * @note If you want this function to work even when the flash cache is disabled, please enable the `CONFIG_RMT_RECV_FUNC_IN_IRAM` option.
  *
  * @param[in] rx_channel RMT RX channel that created by `rmt_new_rx_channel()`
  * @param[in] buffer The buffer to store the received RMT symbols

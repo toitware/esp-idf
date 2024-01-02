@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2021 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -173,6 +173,8 @@ static void btc_dm_remove_ble_bonding_keys(void)
 
     bdcpy(bd_addr.address, btc_dm_cb.pairing_cb.bd_addr);
 
+    btc_storage_remove_gatt_cl_supp_feat(&bd_addr);
+    btc_storage_remove_gatt_db_hash(&bd_addr);
     btc_storage_remove_remote_addr_type(&bd_addr, false);
     btc_storage_remove_ble_dev_auth_mode(&bd_addr, false);
     btc_storage_remove_ble_dev_type(&bd_addr, false);
@@ -263,7 +265,12 @@ static void btc_dm_ble_auth_cmpl_evt (tBTA_DM_AUTH_CMPL *p_auth_cmpl)
             return;
         }
 
-         if (btc_storage_get_remote_addr_type(&bdaddr, &addr_type) != BT_STATUS_SUCCESS) {
+        if (btc_dm_cb.pairing_cb.ble.is_pid_key_rcvd) {
+            // delete unused section in NVS
+            btc_storage_remove_unused_sections(p_auth_cmpl->bd_addr, &btc_dm_cb.pairing_cb.ble.pid_key);
+        }
+
+        if (btc_storage_get_remote_addr_type(&bdaddr, &addr_type) != BT_STATUS_SUCCESS) {
             btc_storage_set_remote_addr_type(&bdaddr, p_auth_cmpl->addr_type, true);
         }
         btc_storage_set_ble_dev_auth_mode(&bdaddr, p_auth_cmpl->auth_mode, true);
@@ -682,6 +689,7 @@ static void btc_dm_acl_link_stat(tBTA_DM_ACL_LINK_STAT *p_acl_link_stat)
 #if (BTC_GAP_BT_INCLUDED == TRUE)
     esp_bt_gap_cb_param_t param;
     esp_bt_gap_cb_event_t event = ESP_BT_GAP_EVT_MAX;
+    bt_bdaddr_t bt_addr;
 
     switch (p_acl_link_stat->event) {
     case BTA_ACL_LINK_STAT_CONN_CMPL: {
@@ -704,6 +712,18 @@ static void btc_dm_acl_link_stat(tBTA_DM_ACL_LINK_STAT *p_acl_link_stat)
     }
     }
 
+#if (SMP_INCLUDED == TRUE)
+    if (p_acl_link_stat->event == BTA_ACL_LINK_STAT_CONN_CMPL &&
+        p_acl_link_stat->link_act.conn_cmpl.status == HCI_SUCCESS) {
+        memcpy(bt_addr.address, p_acl_link_stat->link_act.conn_cmpl.bd_addr, sizeof(bt_addr.address));
+        if (btc_storage_update_active_device(&bt_addr)) {
+            BTC_TRACE_EVENT("Device: %02x:%02x:%02x:%02x:%02x:%02x, is not in bond list",
+                            bt_addr.address[0], bt_addr.address[1],
+                            bt_addr.address[2], bt_addr.address[3],
+                            bt_addr.address[4], bt_addr.address[5]);
+        }
+    }
+#endif  ///SMP_INCLUDED == TRUE
     esp_bt_gap_cb_t cb = (esp_bt_gap_cb_t)btc_profile_cb_get(BTC_PID_GAP_BT);
     if (cb) {
         cb(event, &param);
@@ -735,11 +755,11 @@ void btc_dm_sec_cb_handler(btc_msg_t *msg)
     case BTA_DM_ENABLE_EVT: {
         btc_clear_services_mask();
 #if (SMP_INCLUDED == TRUE)
-        btc_storage_load_bonded_devices();
 #if (BLE_INCLUDED == TRUE)
+        btc_storage_delete_duplicate_ble_devices();
+#endif ///BLE_INCLUDED == TRUE
         //load the bonding device to the btm layer
-        btc_storage_load_bonded_ble_devices();
-#endif  ///BLE_INCLUDED == TRUE
+        btc_storage_load_bonded_devices();
 #endif  ///SMP_INCLUDED == TRUE
 
         /* Set initial device name, it can be overwritten later */
@@ -809,6 +829,8 @@ void btc_dm_sec_cb_handler(btc_msg_t *msg)
 
         if (p_data->link_down.status == HCI_SUCCESS) {
             //remove the bonded key in the config and nvs flash.
+            btc_storage_remove_gatt_cl_supp_feat(&bd_addr);
+            btc_storage_remove_gatt_db_hash(&bd_addr);
             btc_storage_remove_ble_dev_type(&bd_addr, false);
             btc_storage_remove_remote_addr_type(&bd_addr, false);
             btc_storage_remove_ble_dev_auth_mode(&bd_addr, false);
@@ -942,6 +964,19 @@ void btc_dm_sec_cb_handler(btc_msg_t *msg)
         rsp_app = true;
         ble_msg->act = ESP_GAP_BLE_OOB_REQ_EVT;
         memcpy(param.ble_security.ble_req.bd_addr, p_data->ble_req.bd_addr, BD_ADDR_LEN);
+        break;
+    }
+    case BTA_DM_BLE_SC_OOB_REQ_EVT: {
+        rsp_app = true;
+        ble_msg->act = ESP_GAP_BLE_SC_OOB_REQ_EVT;
+        memcpy(param.ble_security.ble_req.bd_addr, p_data->ble_req.bd_addr, BD_ADDR_LEN);
+        break;
+    }
+    case BTA_DM_BLE_SC_CR_LOC_OOB_EVT: {
+        rsp_app = true;
+        ble_msg->act = ESP_GAP_BLE_SC_CR_LOC_OOB_EVT;
+        memcpy(param.ble_security.oob_data.oob_c, p_data->local_oob_data.local_oob_c, BT_OCTET16_LEN);
+        memcpy(param.ble_security.oob_data.oob_r, p_data->local_oob_data.local_oob_r, BT_OCTET16_LEN);
         break;
     }
     case BTA_DM_BLE_LOCAL_IR_EVT: {

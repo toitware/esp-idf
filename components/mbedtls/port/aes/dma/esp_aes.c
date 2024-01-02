@@ -173,23 +173,29 @@ static IRAM_ATTR void esp_aes_complete_isr(void *arg)
     }
 }
 
+void esp_aes_intr_alloc(void)
+{
+    if (op_complete_sem == NULL) {
+        esp_err_t ret = esp_intr_alloc(ETS_AES_INTR_SOURCE, 0, esp_aes_complete_isr, NULL, NULL);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to allocate AES interrupt %d", ret);
+            // This should be treated as fatal error as this API would mostly
+            // be invoked within mbedTLS interface. There is no way for the system
+            // to proceed if the AES interrupt allocation fails here.
+            abort();
+        }
+
+        static StaticSemaphore_t op_sem_buf;
+        op_complete_sem = xSemaphoreCreateBinaryStatic(&op_sem_buf);
+        // Static semaphore creation is unlikley to fail but still basic sanity
+        assert(op_complete_sem != NULL);
+    }
+}
+
 static esp_err_t esp_aes_isr_initialise( void )
 {
     aes_hal_interrupt_clear();
     aes_hal_interrupt_enable(true);
-    if (op_complete_sem == NULL) {
-        op_complete_sem = xSemaphoreCreateBinary();
-
-        if (op_complete_sem == NULL) {
-            ESP_LOGE(TAG, "Failed to create intr semaphore");
-            return ESP_FAIL;
-        }
-
-        esp_err_t ret = esp_intr_alloc(ETS_AES_INTR_SOURCE, 0, esp_aes_complete_isr, NULL, NULL);
-        if (ret != ESP_OK) {
-            return ret;
-        }
-    }
 
     /* AES is clocked proportionally to CPU clock, take power management lock */
 #ifdef CONFIG_PM_ENABLE
@@ -395,6 +401,10 @@ static int esp_aes_process_dma(esp_aes_context *ctx, const unsigned char *input,
         //Limit max inlink descriptor length to be 16 byte aligned, require for EDMA
         lldesc_setup_link_constrained(block_out_desc, output, block_bytes, LLDESC_MAX_NUM_PER_DESC_16B_ALIGNED, 0);
 
+        /* Setup in/out start descriptors */
+        lldesc_append(&in_desc_head, block_in_desc);
+        lldesc_append(&out_desc_head, block_out_desc);
+
         out_desc_tail = &block_out_desc[lldesc_num - 1];
     }
 
@@ -412,25 +422,18 @@ static int esp_aes_process_dma(esp_aes_context *ctx, const unsigned char *input,
         lldesc_setup_link(&s_stream_in_desc, s_stream_in, AES_BLOCK_BYTES, 0);
         lldesc_setup_link(&s_stream_out_desc, s_stream_out, AES_BLOCK_BYTES, 0);
 
-        if (block_bytes > 0) {
-            /* Link with block descriptors*/
-            block_in_desc[lldesc_num - 1].empty = (uint32_t)&s_stream_in_desc;
-            block_out_desc[lldesc_num - 1].empty = (uint32_t)&s_stream_out_desc;
-        }
+        /* Link with block descriptors */
+        lldesc_append(&in_desc_head, &s_stream_in_desc);
+        lldesc_append(&out_desc_head, &s_stream_out_desc);
 
         out_desc_tail = &s_stream_out_desc;
     }
-
-    // block buffers are sent to DMA first, unless there aren't any
-    in_desc_head =  (block_bytes > 0) ? block_in_desc : &s_stream_in_desc;
-    out_desc_head = (block_bytes > 0) ? block_out_desc : &s_stream_out_desc;
-
 
 #if defined (CONFIG_MBEDTLS_AES_USE_INTERRUPT)
     /* Only use interrupt for long AES operations */
     if (len > AES_DMA_INTR_TRIG_LEN) {
         use_intr = true;
-        if (esp_aes_isr_initialise() == ESP_FAIL) {
+        if (esp_aes_isr_initialise() != ESP_OK) {
             ESP_LOGE(TAG, "ESP-AES ISR initialisation failed");
             ret = -1;
             goto cleanup;
@@ -485,6 +488,7 @@ cleanup:
 int esp_aes_process_dma_gcm(esp_aes_context *ctx, const unsigned char *input, unsigned char *output, size_t len, lldesc_t *aad_desc, size_t aad_len)
 {
     lldesc_t *in_desc_head = NULL, *out_desc_head = NULL, *len_desc = NULL;
+    lldesc_t *out_desc_tail = NULL; /* pointer to the final output descriptor */
     lldesc_t stream_in_desc, stream_out_desc;
     lldesc_t *block_desc = NULL, *block_in_desc = NULL, *block_out_desc = NULL;
     size_t lldesc_num;
@@ -534,6 +538,8 @@ int esp_aes_process_dma_gcm(esp_aes_context *ctx, const unsigned char *input, un
 
         lldesc_append(&in_desc_head, block_in_desc);
         lldesc_append(&out_desc_head, block_out_desc);
+
+        out_desc_tail = &block_out_desc[lldesc_num - 1];
     }
 
     /* Any leftover bytes which are appended as an additional DMA list */
@@ -545,6 +551,8 @@ int esp_aes_process_dma_gcm(esp_aes_context *ctx, const unsigned char *input, un
 
         lldesc_append(&in_desc_head, &stream_in_desc);
         lldesc_append(&out_desc_head, &stream_out_desc);
+
+        out_desc_tail = &stream_out_desc;
     }
 
 
@@ -563,7 +571,7 @@ int esp_aes_process_dma_gcm(esp_aes_context *ctx, const unsigned char *input, un
     /* Only use interrupt for long AES operations */
     if (len > AES_DMA_INTR_TRIG_LEN) {
         use_intr = true;
-        if (esp_aes_isr_initialise() == ESP_FAIL) {
+        if (esp_aes_isr_initialise() != ESP_OK) {
             ESP_LOGE(TAG, "ESP-AES ISR initialisation failed");
             ret = -1;
             goto cleanup;
@@ -583,7 +591,7 @@ int esp_aes_process_dma_gcm(esp_aes_context *ctx, const unsigned char *input, un
 
     aes_hal_transform_dma_gcm_start(blocks);
 
-    esp_aes_dma_wait_complete(use_intr, out_desc_head);
+    esp_aes_dma_wait_complete(use_intr, out_desc_tail);
 
     aes_hal_transform_dma_finish();
 

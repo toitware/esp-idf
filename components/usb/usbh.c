@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2015-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2015-2023 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -1077,12 +1077,15 @@ esp_err_t usbh_ep_get_handle(usb_device_handle_t dev_hdl, uint8_t bEndpointAddre
 esp_err_t usbh_ep_enqueue_urb(usbh_ep_handle_t ep_hdl, urb_t *urb)
 {
     USBH_CHECK(ep_hdl != NULL && urb != NULL, ESP_ERR_INVALID_ARG);
-    /*
-    Todo: Here would be a good place to check that the URB is filled correctly according to the USB 2.0 specification.
-    This is currently done by the USB host library layer, but is more appropriate here.
-    */
+    USBH_CHECK(urb_check_args(urb), ESP_ERR_INVALID_ARG);
+
     endpoint_t *ep_obj = (endpoint_t *)ep_hdl;
 
+    USBH_CHECK( transfer_check_usb_compliance(&(urb->transfer),
+                USB_EP_DESC_GET_XFERTYPE(ep_obj->constant.ep_desc),
+                USB_EP_DESC_GET_MPS(ep_obj->constant.ep_desc),
+                USB_EP_DESC_GET_EP_DIR(ep_obj->constant.ep_desc)),
+                ESP_ERR_INVALID_ARG);
     // Check that the EP's underlying pipe is in the active state before submitting the URB
     if (hcd_pipe_get_state(ep_obj->constant.pipe_hdl) != HCD_PIPE_STATE_ACTIVE) {
         return ESP_ERR_INVALID_STATE;

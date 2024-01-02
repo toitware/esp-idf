@@ -13,7 +13,7 @@ stages:
 workflow:
   rules:
     # Disable those non-protected push triggered pipelines
-    - if: '$CI_COMMIT_REF_NAME != "master" && $CI_COMMIT_BRANCH !~ /^release\/v/ && $CI_COMMIT_TAG !~ /^v\d+\.\d+(\.\d+)?($|-)/ && $CI_PIPELINE_SOURCE == "push"'
+    - if: '$CI_COMMIT_REF_NAME != "master" && $CI_COMMIT_BRANCH !~ /^release\/v/ && $CI_COMMIT_TAG !~ /^v\d+\.\d+(\.\d+)?($|-)/ && $CI_COMMIT_TAG !~ /^qa-test/ && $CI_PIPELINE_SOURCE == "push"'
       when: never
     # when running merged result pipelines, it would create a temp commit id. use $CI_MERGE_REQUEST_SOURCE_BRANCH_SHA instead of $CI_COMMIT_SHA.
     # Please use PIPELINE_COMMIT_SHA at all places that require a commit sha
@@ -73,9 +73,6 @@ variables:
 
   PRE_COMMIT_IMAGE: "$CI_DOCKER_REGISTRY/esp-idf-pre-commit:1"
 
-  # target test config file, used by assign test job
-  CI_TARGET_TEST_CONFIG_FILE: "$CI_PROJECT_DIR/.gitlab/ci/target-test.yml"
-
   # target test repo parameters
   TEST_ENV_CONFIG_REPO: "https://gitlab-ci-token:${BOT_TOKEN}@${CI_SERVER_HOST}:${CI_SERVER_PORT}/qa/ci-test-runner-configs.git"
 
@@ -132,8 +129,8 @@ cache:
   export PYTHONPATH="$IDF_PATH/tools:$IDF_PATH/tools/esp_app_trace:$IDF_PATH/components/partition_table:$IDF_PATH/tools/ci/python_packages:$PYTHONPATH"
 
 .setup_tools_and_idf_python_venv: &setup_tools_and_idf_python_venv |
-  # must use after setup_tools_except_target_test
-  # otherwise the export.sh won't work properly
+  # Since the version 3.21 CMake passes source files and include dirs to ninja using absolute paths.
+  $IDF_PATH/tools/idf_tools.py --non-interactive install cmake
 
   # download constraint file for dev
   if [[ -n "$CI_PYTHON_CONSTRAINT_BRANCH" ]]; then
@@ -228,6 +225,7 @@ include:
   - '.gitlab/ci/pre_check.yml'
   - '.gitlab/ci/build.yml'
   - '.gitlab/ci/assign-test.yml'
+  - '.gitlab/ci/integration_test.yml'
   - '.gitlab/ci/host-test.yml'
   - '.gitlab/ci/target-test.yml'
   - '.gitlab/ci/deploy.yml'

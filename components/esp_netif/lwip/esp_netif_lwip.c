@@ -1,5 +1,5 @@
 /*
- * SPDX-FileCopyrightText: 2019-2022 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2019-2023 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -148,14 +148,6 @@ static esp_err_t set_lwip_netif_callback(struct esp_netif_api_msg_s *msg)
     return ESP_OK;
 }
 
-static esp_err_t remove_lwip_netif_callback(struct esp_netif_api_msg_s *msg)
-{
-    (void)msg;
-    netif_remove_ext_callback(&netif_callback);
-    memset(&netif_callback, 0, sizeof(netif_callback));
-    return ESP_OK;
-}
-
 static void dns_clear_servers(bool keep_fallback)
 {
     u8_t numdns = 0;
@@ -253,6 +245,16 @@ static inline esp_err_t esp_netif_lwip_ipc_call_fn(esp_netif_api_fn fn, esp_neti
 {
     esp_netif_api_msg_t msg = {
             .user_fn = user_fn,
+            .data = ctx,
+            .api_fn = fn
+    };
+    return esp_netif_lwip_ipc_call_msg(&msg);
+}
+
+static inline esp_err_t esp_netif_lwip_ipc_call_get_netif(esp_netif_api_fn fn, esp_netif_t **netif, void *ctx)
+{
+    esp_netif_api_msg_t msg = {
+            .p_esp_netif = netif,
             .data = ctx,
             .api_fn = fn
     };
@@ -502,6 +504,10 @@ static void tcpip_init_done(void *arg)
 
 esp_err_t esp_netif_init(void)
 {
+    if (esp_netif_objects_init() != ESP_OK) {
+        ESP_LOGE(TAG, "esp_netif_objects_init() failed");
+        return ESP_FAIL;
+    }
     if (!sys_thread_tcpip(LWIP_CORE_IS_TCPIP_INITIALIZED)) {
 #if CONFIG_LWIP_HOOK_TCP_ISN_DEFAULT
         uint8_t rand_buf[16];
@@ -559,6 +565,11 @@ esp_err_t esp_netif_init(void)
 
 esp_err_t esp_netif_deinit(void)
 {
+    /* esp_netif_deinit() is not supported (as lwIP deinit isn't suported either)
+     * Once it's supported, we need to de-initialize:
+     * - netif objects calling esp_netif_objects_deinit()
+     * - other lwIP specific objects (see the comment after tcpip_initialized)
+     */
     if (sys_thread_tcpip(LWIP_CORE_IS_TCPIP_INITIALIZED)) {
         /* deinit of LwIP not supported:
          * do not deinit semaphores and states,
@@ -566,6 +577,7 @@ esp_err_t esp_netif_deinit(void)
          *
         sys_sem_free(&api_sync_sem);
         sys_sem_free(&api_lock_sem);
+        netif_remove_ext_callback(); (in lwip context)
          */
         return ESP_ERR_NOT_SUPPORTED;
 
@@ -736,8 +748,6 @@ esp_netif_t *esp_netif_new(const esp_netif_config_t *esp_netif_config)
 
     esp_netif->lwip_netif = lwip_netif;
 
-    esp_netif_add_to_list(esp_netif);
-
 #if ESP_DHCPS
     // Create DHCP server structure
     if (esp_netif_config->base->flags & ESP_NETIF_DHCP_SERVER) {
@@ -763,7 +773,37 @@ esp_netif_t *esp_netif_new(const esp_netif_config_t *esp_netif_config)
         esp_netif_lwip_ipc_no_args(set_lwip_netif_callback);
     }
 
+    esp_netif_add_to_list(esp_netif);
+
     return esp_netif;
+}
+
+typedef struct find_if_api {
+    esp_netif_find_predicate_t fn;
+    void *ctx;
+} find_if_api_t;
+
+static esp_err_t esp_netif_find_if_api(esp_netif_api_msg_t *msg)
+{
+    find_if_api_t *find_if_api = msg->data;
+    esp_netif_t *esp_netif = NULL;
+    while ((esp_netif = esp_netif_next_unsafe(esp_netif)) != NULL) {
+        if (find_if_api->fn(esp_netif, find_if_api->ctx)) {
+            *msg->p_esp_netif = esp_netif;
+            return ESP_OK;
+        }
+    }
+    return ESP_FAIL;
+}
+
+esp_netif_t *esp_netif_find_if(esp_netif_find_predicate_t fn, void *ctx)
+{
+    esp_netif_t *netif = NULL;
+    find_if_api_t find_if_api = { .fn = fn, .ctx = ctx };
+    if (esp_netif_lwip_ipc_call_get_netif(esp_netif_find_if_api, &netif, &find_if_api) == ESP_OK) {
+        return netif;
+    }
+    return NULL;
 }
 
 static void esp_netif_lwip_remove(esp_netif_t *esp_netif)
@@ -858,9 +898,11 @@ void esp_netif_destroy(esp_netif_t *esp_netif)
 {
     if (esp_netif) {
         esp_netif_remove_from_list(esp_netif);
-        if (esp_netif_get_nr_of_ifs() == 0) {
-            esp_netif_lwip_ipc_no_args(remove_lwip_netif_callback);
-        }
+        // not calling  `netif_remove_ext_callback()` if number of netifs is 0
+        // since it's unsafe.
+        // It is expected to be called globally in `esp_netif_deinit()`
+        // once it's supported.
+        // }
         free(esp_netif->ip_info);
         free(esp_netif->ip_info_old);
         free(esp_netif->if_key);
@@ -2168,41 +2210,64 @@ esp_err_t esp_netif_dhcps_option_api(esp_netif_api_msg_t *msg)
                 break;
             }
             case ESP_NETIF_SUBNET_MASK: {
+                esp_netif_ip_info_t *default_ip = esp_netif->ip_info;
+                ip4_addr_t *config_netmask = (ip4_addr_t *)opt->val;
+                if (!memcmp(&default_ip->netmask, config_netmask, sizeof(struct ip4_addr))) {
+                    ESP_LOGE(TAG, "Please use esp_netif_set_ip_info interface to configure subnet mask");
+                    /*
+                     * This API directly changes the subnet mask of dhcp server
+                     * but the subnet mask of the network interface has not changed
+                     * If you need to change the subnet mask of dhcp server
+                     * you need to change the subnet mask of the network interface first.
+                     * If the subnet mask of dhcp server is changed
+                     * and the subnet mask of network interface is inconsistent
+                     * with the subnet mask of dhcp sever, it may lead to the failure of sending packets.
+                     * If want to configure the subnet mask of dhcp server
+                     * please use esp_netif_set_ip_info to change the subnet mask of network interface first.
+                     */
+                    return ESP_ERR_ESP_NETIF_INVALID_PARAMS;
+                }
                 memcpy(opt_info, opt->val, opt->len);
                 break;
             }
             case REQUESTED_IP_ADDRESS: {
                 esp_netif_ip_info_t info;
-                uint32_t softap_ip = 0;
+                uint32_t server_ip = 0;
                 uint32_t start_ip = 0;
                 uint32_t end_ip = 0;
+                uint32_t range_start_ip = 0;
+                uint32_t range_end_ip = 0;
                 dhcps_lease_t *poll = opt->val;
 
                 if (poll->enable) {
                     memset(&info, 0x00, sizeof(esp_netif_ip_info_t));
                     esp_netif_get_ip_info(esp_netif, &info);
 
-                    softap_ip = htonl(info.ip.addr);
+                    server_ip = htonl(info.ip.addr);
+                    range_start_ip = server_ip & htonl(info.netmask.addr);
+                    range_end_ip = range_start_ip | ~htonl(info.netmask.addr);
+                    if (server_ip == range_start_ip || server_ip == range_end_ip) {
+                        return ESP_ERR_ESP_NETIF_INVALID_PARAMS;
+                    }
                     start_ip = htonl(poll->start_ip.addr);
                     end_ip = htonl(poll->end_ip.addr);
 
                     /*config ip information can't contain local ip*/
-                    if ((start_ip <= softap_ip) && (softap_ip <= end_ip)) {
+                    if ((server_ip >= start_ip) && (server_ip <= end_ip)) {
                         return ESP_ERR_ESP_NETIF_INVALID_PARAMS;
                     }
-
                     /*config ip information must be in the same segment as the local ip*/
-                    softap_ip >>= 8;
-                    if ((start_ip >> 8 != softap_ip)
-                        || (end_ip >> 8 != softap_ip)) {
+                    if (start_ip <= range_start_ip || start_ip >= range_end_ip) {
                         return ESP_ERR_ESP_NETIF_INVALID_PARAMS;
                     }
-
-                    if (end_ip - start_ip > DHCPS_MAX_LEASE) {
+                    if (end_ip <= range_start_ip || end_ip >= range_end_ip) {
+                        return ESP_ERR_ESP_NETIF_INVALID_PARAMS;
+                    }
+                    /*The number of configured ip is less than DHCPS_MAX_LEASE*/
+                    if ((end_ip - start_ip + 1 > DHCPS_MAX_LEASE) || (start_ip >= end_ip)) {
                         return ESP_ERR_ESP_NETIF_INVALID_PARAMS;
                     }
                 }
-
                 memcpy(opt_info, opt->val, opt->len);
                 break;
             }

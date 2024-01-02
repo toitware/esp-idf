@@ -197,7 +197,7 @@ def action_extensions(base_actions: Dict, project_path: str) -> Dict:
             r.append('set confirm on')
             r.append('end')
             r.append('')
-            return os.linesep.join(r)
+            return '\n'.join(r)
         raise FatalError(f'{ESP_ROM_INFO_FILE} file not found. Please check IDF integrity.')
 
     def generate_gdbinit_files(gdb: str, gdbinit: Optional[str], project_desc: Dict[str, Any]) -> None:
@@ -206,7 +206,7 @@ def action_extensions(base_actions: Dict, project_path: str) -> Dict:
             raise FatalError('ELF file not found. You need to build & flash the project before running debug targets')
 
         # Recreate empty 'gdbinit' directory
-        gdbinit_dir = os.path.join(project_desc['build_dir'], 'gdbinit')
+        gdbinit_dir = '/'.join([project_desc['build_dir'], 'gdbinit'])
         if os.path.isfile(gdbinit_dir):
             os.remove(gdbinit_dir)
         elif os.path.isdir(gdbinit_dir):
@@ -214,7 +214,7 @@ def action_extensions(base_actions: Dict, project_path: str) -> Dict:
         os.mkdir(gdbinit_dir)
 
         # Prepare gdbinit for Python GDB extensions import
-        py_extensions = os.path.join(gdbinit_dir, 'py_extensions')
+        py_extensions = '/'.join([gdbinit_dir, 'py_extensions'])
         with open(py_extensions, 'w') as f:
             if is_gdb_with_python(gdb):
                 f.write(GDBINIT_PYTHON_TEMPLATE.format(sys_path=sys.path))
@@ -222,7 +222,7 @@ def action_extensions(base_actions: Dict, project_path: str) -> Dict:
                 f.write(GDBINIT_PYTHON_NOT_SUPPORTED)
 
         # Prepare gdbinit for related ELFs symbols load
-        symbols = os.path.join(gdbinit_dir, 'symbols')
+        symbols = '/'.join([gdbinit_dir, 'symbols'])
         with open(symbols, 'w') as f:
             boot_elf = get_normalized_path(project_desc['bootloader_elf']) if 'bootloader_elf' in project_desc else None
             if boot_elf and os.path.exists(boot_elf):
@@ -234,7 +234,7 @@ def action_extensions(base_actions: Dict, project_path: str) -> Dict:
 
         # Generate the gdbinit for target connect if no custom gdbinit is present
         if not gdbinit:
-            gdbinit = os.path.join(gdbinit_dir, 'connect')
+            gdbinit = '/'.join([gdbinit_dir, 'connect'])
             with open(gdbinit, 'w') as f:
                 f.write(GDBINIT_CONNECT)
 

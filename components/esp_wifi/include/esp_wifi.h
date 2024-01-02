@@ -94,6 +94,8 @@ typedef struct {
     int                    tx_buf_type;            /**< WiFi TX buffer type */
     int                    static_tx_buf_num;      /**< WiFi static TX buffer number */
     int                    dynamic_tx_buf_num;     /**< WiFi dynamic TX buffer number */
+    int                    rx_mgmt_buf_type;       /**< WiFi RX MGMT buffer type */
+    int                    rx_mgmt_buf_num;        /**< WiFi RX MGMT buffer number */
     int                    cache_tx_buf_num;       /**< WiFi TX cache buffer number */
     int                    csi_enable;             /**< WiFi channel state information enable flag */
     int                    ampdu_rx_enable;        /**< WiFi AMPDU RX feature enable flag */
@@ -127,6 +129,12 @@ typedef struct {
 #define WIFI_DYNAMIC_TX_BUFFER_NUM CONFIG_ESP32_WIFI_DYNAMIC_TX_BUFFER_NUM
 #else
 #define WIFI_DYNAMIC_TX_BUFFER_NUM 0
+#endif
+
+#ifdef CONFIG_ESP_WIFI_RX_MGMT_BUF_NUM_DEF
+#define WIFI_RX_MGMT_BUF_NUM_DEF CONFIG_ESP_WIFI_RX_MGMT_BUF_NUM_DEF
+#else
+#define WIFI_RX_MGMT_BUF_NUM_DEF 0
 #endif
 
 #if CONFIG_ESP32_WIFI_CSI_ENABLED
@@ -213,6 +221,8 @@ extern uint64_t g_wifi_feature_caps;
     .tx_buf_type = CONFIG_ESP32_WIFI_TX_BUFFER_TYPE,\
     .static_tx_buf_num = WIFI_STATIC_TX_BUFFER_NUM,\
     .dynamic_tx_buf_num = WIFI_DYNAMIC_TX_BUFFER_NUM,\
+    .rx_mgmt_buf_type = CONFIG_ESP_WIFI_DYNAMIC_RX_MGMT_BUF,\
+    .rx_mgmt_buf_num = WIFI_RX_MGMT_BUF_NUM_DEF,\
     .cache_tx_buf_num = WIFI_CACHE_TX_BUFFER_NUM,\
     .csi_enable = WIFI_CSI_ENABLED,\
     .ampdu_rx_enable = WIFI_AMPDU_RX_ENABLED,\
@@ -342,9 +352,9 @@ esp_err_t esp_wifi_restore(void);
   * @attention 3. The scanning triggered by esp_wifi_scan_start() will not be effective until connection between ESP32 and the AP is established.
   *               If ESP32 is scanning and connecting at the same time, ESP32 will abort scanning and return a warning message and error
   *               number ESP_ERR_WIFI_STATE.
-  *               If you want to do reconnection after ESP32 received disconnect event, remember to add the maximum retry time, otherwise the called
-  *               scan will not work. This is especially true when the AP doesn't exist, and you still try reconnection after ESP32 received disconnect
-  *               event with the reason code WIFI_REASON_NO_AP_FOUND.
+  * @attention 4. This API attempts to connect to an Access Point (AP) only once. To enable reconnection in case of a connection failure, please use
+  *               the 'failure_retry_cnt' feature in the 'wifi_sta_config_t'. Users are suggested to implement reconnection logic in their application
+  *               for scenarios where the specified AP does not exist, or reconnection is desired after the device has received a disconnect event.
   *
   * @return
   *    - ESP_OK: succeed
@@ -393,13 +403,16 @@ esp_err_t esp_wifi_deauth_sta(uint16_t aid);
 /**
   * @brief     Scan all available APs.
   *
-  * @attention If this API is called, the found APs are stored in WiFi driver dynamic allocated memory and the
-  *            will be freed in esp_wifi_scan_get_ap_records, so generally, call esp_wifi_scan_get_ap_records to cause
-  *            the memory to be freed once the scan is done
+  * @attention If this API is called, the found APs are stored in WiFi driver dynamic allocated memory. And then
+  *            can be freed in esp_wifi_scan_get_ap_records(), esp_wifi_scan_get_ap_record() or esp_wifi_clear_ap_list(),
+  *            so call any one to free the memory once the scan is done.
   * @attention The values of maximum active scan time and passive scan time per channel are limited to 1500 milliseconds.
   *            Values above 1500ms may cause station to disconnect from AP and are not recommended.
   *
-  * @param     config  configuration of scanning
+  * @param     config  configuration settings for scanning, if set to NULL default settings will be used
+  *                    of which default values are show_hidden:false, scan_type:active, scan_time.active.min:0,
+  *                    scan_time.active.max:120 miliseconds, scan_time.passive:360 miliseconds
+  *
   * @param     block if block is true, this API will block the caller until the scan is done, otherwise
   *                         it will return immediately
   *
@@ -426,7 +439,7 @@ esp_err_t esp_wifi_scan_stop(void);
 /**
   * @brief     Get number of APs found in last scan
   *
-  * @param[out] number  store number of APIs found in last scan
+  * @param[out] number  store number of APs found in last scan
   *
   * @attention This API can only be called when the scan is completed, otherwise it may get wrong value.
   *
@@ -439,7 +452,9 @@ esp_err_t esp_wifi_scan_stop(void);
 esp_err_t esp_wifi_scan_get_ap_num(uint16_t *number);
 
 /**
-  * @brief     Get AP list found in last scan
+  * @brief     Get AP list found in last scan.
+  *
+  * @attention  This API will free all memory occupied by scanned AP list.
   *
   * @param[inout]  number As input param, it stores max AP number ap_records can hold.
   *                As output param, it receives the actual AP number this API returns.
@@ -454,11 +469,30 @@ esp_err_t esp_wifi_scan_get_ap_num(uint16_t *number);
   */
 esp_err_t esp_wifi_scan_get_ap_records(uint16_t *number, wifi_ap_record_t *ap_records);
 
+/**
+ * @brief      Get one AP record from the scanned AP list.
+ *
+ * @attention  Different from esp_wifi_scan_get_ap_records(), this API only gets one AP record
+ *             from the scanned AP list each time. This API will free the memory of one AP record,
+ *             if the user doesn't get all records in the scannned AP list, then needs to call esp_wifi_clear_ap_list()
+ *             to free the remaining memory.
+ *
+ * @param[out] ap_record  pointer to one AP record
+ *
+ * @return
+ *    - ESP_OK: succeed
+ *    - ESP_ERR_WIFI_NOT_INIT: WiFi is not initialized by esp_wifi_init
+ *    - ESP_ERR_WIFI_NOT_STARTED: WiFi is not started by esp_wifi_start
+ *    - ESP_ERR_INVALID_ARG: invalid argument
+ *    - ESP_FAIL: scan APs is NULL, means all AP records fetched or no AP found
+ */
+esp_err_t esp_wifi_scan_get_ap_record(wifi_ap_record_t *ap_record);
 
 /**
   * @brief     Clear AP list found in last scan
   *
-  * @attention When the obtained ap list fails,bss info must be cleared,otherwise it may cause memory leakage.
+  * @attention This API will free all memory occupied by scanned AP list.
+  *            When the obtained AP list fails, AP records must be cleared,otherwise it may cause memory leakage.
   *
   * @return
   *    - ESP_OK: succeed
@@ -783,7 +817,7 @@ esp_err_t esp_wifi_set_promiscuous_ctrl_filter(const wifi_promiscuous_filter_t *
   * @return
   *    - ESP_OK: succeed
   *    - ESP_ERR_WIFI_NOT_INIT: WiFi is not initialized by esp_wifi_init
-  *    - ESP_ERR_WIFI_ARG: invalid argument
+  *    - ESP_ERR_INVALID_ARG: invalid argument
   */
 esp_err_t esp_wifi_get_promiscuous_ctrl_filter(wifi_promiscuous_filter_t *filter);
 
@@ -807,7 +841,7 @@ esp_err_t esp_wifi_get_promiscuous_ctrl_filter(wifi_promiscuous_filter_t *filter
   *    - ESP_ERR_WIFI_MODE: invalid mode
   *    - ESP_ERR_WIFI_PASSWORD: invalid password
   *    - ESP_ERR_WIFI_NVS: WiFi internal NVS error
-  *    - others: refer to the erro code in esp_err.h
+  *    - others: refer to the error code in esp_err.h
   */
 esp_err_t esp_wifi_set_config(wifi_interface_t interface, wifi_config_t *conf);
 
@@ -930,7 +964,7 @@ esp_err_t esp_wifi_set_vendor_ie_cb(esp_vendor_ie_cb_t cb, void *ctx);
   *    - ESP_OK: succeed
   *    - ESP_ERR_WIFI_NOT_INIT: WiFi is not initialized by esp_wifi_init
   *    - ESP_ERR_WIFI_NOT_STARTED: WiFi is not started by esp_wifi_start
-  *    - ESP_ERR_WIFI_ARG: invalid argument, e.g. parameter is out of range
+  *    - ESP_ERR_INVALID_ARG: invalid argument, e.g. parameter is out of range
   */
 esp_err_t esp_wifi_set_max_tx_power(int8_t power);
 
@@ -943,7 +977,7 @@ esp_err_t esp_wifi_set_max_tx_power(int8_t power);
   *    - ESP_OK: succeed
   *    - ESP_ERR_WIFI_NOT_INIT: WiFi is not initialized by esp_wifi_init
   *    - ESP_ERR_WIFI_NOT_STARTED: WiFi is not started by esp_wifi_start
-  *    - ESP_ERR_WIFI_ARG: invalid argument
+  *    - ESP_ERR_INVALID_ARG: invalid argument
   */
 esp_err_t esp_wifi_get_max_tx_power(int8_t *power);
 
@@ -972,7 +1006,7 @@ esp_err_t esp_wifi_set_event_mask(uint32_t mask);
   * @return
   *    - ESP_OK: succeed
   *    - ESP_ERR_WIFI_NOT_INIT: WiFi is not initialized by esp_wifi_init
-  *    - ESP_ERR_WIFI_ARG: invalid argument
+  *    - ESP_ERR_INVALID_ARG: invalid argument
   */
 esp_err_t esp_wifi_get_event_mask(uint32_t *mask);
 
@@ -992,7 +1026,7 @@ esp_err_t esp_wifi_get_event_mask(uint32_t *mask);
   *            the system sequence number.
   *            Generally, if esp_wifi_80211_tx is called before the Wi-Fi connection has been set up, both
   *            en_sys_seq==true and en_sys_seq==false are fine. However, if the API is called after the Wi-Fi
-  *            connection has been set up, en_sys_seq must be true, otherwise ESP_ERR_WIFI_ARG is returned.
+  *            connection has been set up, en_sys_seq must be true, otherwise ESP_ERR_INVALID_ARG is returned.
   *
   * @return
   *    - ESP_OK: success
@@ -1064,7 +1098,7 @@ esp_err_t esp_wifi_set_csi(bool en);
   * @return
   *    - ESP_OK: succeed
   *    - ESP_ERR_WIFI_NOT_INIT: WiFi is not initialized by esp_wifi_init
-  *    - ESP_ERR_WIFI_ARG: Invalid argument, e.g. parameter is NULL, invalid GPIO number etc
+  *    - ESP_ERR_INVALID_ARG: Invalid argument, e.g. parameter is NULL, invalid GPIO number etc
   */
 esp_err_t esp_wifi_set_ant_gpio(const wifi_ant_gpio_config_t *config);
 
@@ -1076,7 +1110,7 @@ esp_err_t esp_wifi_set_ant_gpio(const wifi_ant_gpio_config_t *config);
   * @return
   *    - ESP_OK: succeed
   *    - ESP_ERR_WIFI_NOT_INIT: WiFi is not initialized by esp_wifi_init
-  *    - ESP_ERR_WIFI_ARG: invalid argument, e.g. parameter is NULL
+  *    - ESP_ERR_INVALID_ARG: invalid argument, e.g. parameter is NULL
   */
 esp_err_t esp_wifi_get_ant_gpio(wifi_ant_gpio_config_t *config);
 
@@ -1089,7 +1123,7 @@ esp_err_t esp_wifi_get_ant_gpio(wifi_ant_gpio_config_t *config);
   * @return
   *    - ESP_OK: succeed
   *    - ESP_ERR_WIFI_NOT_INIT: WiFi is not initialized by esp_wifi_init
-  *    - ESP_ERR_WIFI_ARG: Invalid argument, e.g. parameter is NULL, invalid antenna mode or invalid GPIO number
+  *    - ESP_ERR_INVALID_ARG: Invalid argument, e.g. parameter is NULL, invalid antenna mode or invalid GPIO number
   */
 esp_err_t esp_wifi_set_ant(const wifi_ant_config_t *config);
 
@@ -1101,7 +1135,7 @@ esp_err_t esp_wifi_set_ant(const wifi_ant_config_t *config);
   * @return
   *    - ESP_OK: succeed
   *    - ESP_ERR_WIFI_NOT_INIT: WiFi is not initialized by esp_wifi_init
-  *    - ESP_ERR_WIFI_ARG: invalid argument, e.g. parameter is NULL
+  *    - ESP_ERR_INVALID_ARG: invalid argument, e.g. parameter is NULL
   */
 esp_err_t esp_wifi_get_ant(wifi_ant_config_t *config);
 
@@ -1134,7 +1168,7 @@ int64_t esp_wifi_get_tsf_time(wifi_interface_t interface);
   *    - ESP_OK: succeed
   *    - ESP_ERR_WIFI_NOT_INIT: WiFi is not initialized by esp_wifi_init
   *    - ESP_ERR_WIFI_NOT_STARTED: WiFi is not started by esp_wifi_start
-  *    - ESP_ERR_WIFI_ARG: invalid argument, For Station, if sec is less than 3. For SoftAP, if sec is less than 10.
+  *    - ESP_ERR_INVALID_ARG: invalid argument, For Station, if sec is less than 3. For SoftAP, if sec is less than 10.
   */
 esp_err_t esp_wifi_set_inactive_time(wifi_interface_t ifx, uint16_t sec);
 
@@ -1148,7 +1182,7 @@ esp_err_t esp_wifi_set_inactive_time(wifi_interface_t ifx, uint16_t sec);
   *    - ESP_OK: succeed
   *    - ESP_ERR_WIFI_NOT_INIT: WiFi is not initialized by esp_wifi_init
   *    - ESP_ERR_WIFI_NOT_STARTED: WiFi is not started by esp_wifi_start
-  *    - ESP_ERR_WIFI_ARG: invalid argument
+  *    - ESP_ERR_INVALID_ARG: invalid argument
   */
 esp_err_t esp_wifi_get_inactive_time(wifi_interface_t ifx, uint16_t *sec);
 
@@ -1164,16 +1198,18 @@ esp_err_t esp_wifi_get_inactive_time(wifi_interface_t ifx, uint16_t *sec);
 esp_err_t esp_wifi_statis_dump(uint32_t modules);
 
 /**
-  * @brief      Set RSSI threshold below which APP will get an event
+  * @brief      Set RSSI threshold, if average rssi gets lower than threshold, WiFi task will post event WIFI_EVENT_STA_BSS_RSSI_LOW.
   *
-  * @attention  This API needs to be called every time after WIFI_EVENT_STA_BSS_RSSI_LOW event is received.
+  * @attention  If the user wants to receive another WIFI_EVENT_STA_BSS_RSSI_LOW event after receiving one, this API needs to be
+  *             called again with an updated/same RSSI threshold.
   *
-  * @param      rssi threshold value in dbm between -100 to 0
+  * @param      rssi threshold value in dbm between -100 to 10
+  *             Note that in some rare cases where signal strength is very strong, rssi values can be slightly positive.
   *
   * @return
   *    - ESP_OK: succeed
   *    - ESP_ERR_WIFI_NOT_INIT: WiFi is not initialized by esp_wifi_init
-  *    - ESP_ERR_WIFI_ARG: invalid argument
+  *    - ESP_ERR_INVALID_ARG: invalid argument
   */
 esp_err_t esp_wifi_set_rssi_threshold(int32_t rssi);
 
@@ -1337,8 +1373,6 @@ esp_err_t esp_wifi_sta_get_aid(uint16_t *aid);
   * @brief     Get the negotiated phymode after connection.
   *
   * @param[out] phymode  store the negotiated phymode.
-  *
-  * @attention Operation phy mode, BIT[5]: indicate whether LR enabled, BIT[0-4]: wifi_phy_mode_t
   *
   * @return
   *    - ESP_OK: succeed

@@ -35,6 +35,8 @@ typedef struct {
                                               The step size of each count tick equals to (1 / resolution_hz) seconds */
     mcpwm_timer_count_mode_t count_mode; /*!< Count mode */
     uint32_t period_ticks;               /*!< Number of count ticks within a period */
+    int intr_priority;                   /*!< MCPWM timer interrupt priority,
+                                              if set to 0, the driver will try to allocate an interrupt with a relative low priority (1,2,3) */
     struct {
         uint32_t update_period_on_empty: 1; /*!< Whether to update period when timer counts to zero */
         uint32_t update_period_on_sync: 1;  /*!< Whether to update period on sync event */
@@ -66,6 +68,24 @@ esp_err_t mcpwm_new_timer(const mcpwm_timer_config_t *config, mcpwm_timer_handle
  *      - ESP_FAIL: Delete MCPWM timer failed because of other error
  */
 esp_err_t mcpwm_del_timer(mcpwm_timer_handle_t timer);
+
+/**
+ * @brief Set a new period for MCPWM timer
+ *
+ * @note If `mcpwm_timer_config_t::update_period_on_empty` and `mcpwm_timer_config_t::update_period_on_sync` are not set,
+ *       the new period will take effect immediately.
+ *       Otherwise, the new period will take effect when timer counts to zero or on sync event.
+ * @note You may need to use `mcpwm_comparator_set_compare_value` to set a new compare value for MCPWM comparator
+ *       in order to keep the same PWM duty cycle.
+ *
+ * @param[in] timer MCPWM timer handle, allocated by `mcpwm_new_timer`
+ * @param[in] period_ticks New period in count ticks
+ * @return
+ *      - ESP_OK: Set new period for MCPWM timer successfully
+ *      - ESP_ERR_INVALID_ARG: Set new period for MCPWM timer failed because of invalid argument
+ *      - ESP_FAIL: Set new period for MCPWM timer failed because of other error
+ */
+esp_err_t mcpwm_timer_set_period(mcpwm_timer_handle_t timer, uint32_t period_ticks);
 
 /**
  * @brief Enable MCPWM timer

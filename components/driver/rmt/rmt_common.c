@@ -53,6 +53,8 @@ rmt_group_t *rmt_acquire_group_handle(int group_id)
             // enable APB access RMT registers
             periph_module_enable(rmt_periph_signals.groups[group_id].module);
             periph_module_reset(rmt_periph_signals.groups[group_id].module);
+            // "uninitialize" group intr_priority, read comments in `rmt_new_tx_channel()` for detail
+            group->intr_priority = RMT_GROUP_INTR_PRIORITY_UNINITALIZED;
             // hal layer initialize
             rmt_hal_init(&group->hal);
         }
@@ -122,36 +124,40 @@ esp_err_t rmt_select_periph_clock(rmt_channel_handle_t chan, rmt_clock_source_t 
     ESP_RETURN_ON_FALSE(!clock_selection_conflict, ESP_ERR_INVALID_STATE, TAG,
                         "group clock conflict, already is %d but attempt to %d", group->clk_src, clk_src);
 
+#if CONFIG_PM_ENABLE
+    // if DMA is not used, we're using CPU to push the data to the RMT FIFO
+    // if the CPU frequency goes down, the transfer+encoding scheme could be unstable because CPU can't fill the data in time
+    // so, choose ESP_PM_CPU_FREQ_MAX lock for non-dma mode
+    // otherwise, chose lock type based on the clock source
+    esp_pm_lock_type_t pm_lock_type = chan->dma_chan ? ESP_PM_NO_LIGHT_SLEEP : ESP_PM_CPU_FREQ_MAX;
+
+#if SOC_RMT_SUPPORT_APB
+    if (clk_src == RMT_CLK_SRC_APB) {
+        // APB clock frequency can be changed during DFS
+        pm_lock_type = ESP_PM_APB_FREQ_MAX;
+    }
+#endif // SOC_RMT_SUPPORT_APB
+
+    sprintf(chan->pm_lock_name, "rmt_%d_%d", group->group_id, channel_id); // e.g. rmt_0_0
+    ret  = esp_pm_lock_create(pm_lock_type, 0, chan->pm_lock_name, &chan->pm_lock);
+    ESP_RETURN_ON_ERROR(ret, TAG, "create pm lock failed");
+#endif
+
     // [clk_tree] TODO: replace the following switch table by clk_tree API
     switch (clk_src) {
 #if SOC_RMT_SUPPORT_APB
     case RMT_CLK_SRC_APB:
         periph_src_clk_hz = esp_clk_apb_freq();
-#if CONFIG_PM_ENABLE
-        sprintf(chan->pm_lock_name, "rmt_%d_%d", group->group_id, channel_id); // e.g. rmt_0_0
-        ret  = esp_pm_lock_create(ESP_PM_APB_FREQ_MAX, 0, chan->pm_lock_name, &chan->pm_lock);
-        ESP_RETURN_ON_ERROR(ret, TAG, "create APB_FREQ_MAX lock failed");
-        ESP_LOGD(TAG, "install APB_FREQ_MAX lock for RMT channel (%d,%d)", group->group_id, channel_id);
-#endif // CONFIG_PM_ENABLE
 #endif // SOC_RMT_SUPPORT_APB
         break;
 #if SOC_RMT_SUPPORT_AHB
     case RMT_CLK_SRC_AHB:
-        // TODO: decide which kind of PM lock we should use for such clock
         periph_src_clk_hz = 48 * 1000 * 1000;
         break;
 #endif // SOC_RMT_SUPPORT_AHB
 #if SOC_RMT_SUPPORT_XTAL
     case RMT_CLK_SRC_XTAL:
         periph_src_clk_hz = esp_clk_xtal_freq();
-#if CONFIG_PM_ENABLE
-        sprintf(chan->pm_lock_name, "rmt_%d_%d", group->group_id, channel_id); // e.g. rmt_0_0
-        // XTAL will be power down in the light sleep (predefined low power modes)
-        // acquire a NO_LIGHT_SLEEP lock here to prevent the system go into light sleep automatically
-        ret  = esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, chan->pm_lock_name, &chan->pm_lock);
-        ESP_RETURN_ON_ERROR(ret, TAG, "create NO_LIGHT_SLEEP lock failed");
-        ESP_LOGD(TAG, "install NO_LIGHT_SLEEP lock for RMT channel (%d,%d)", group->group_id, channel_id);
-#endif // CONFIG_PM_ENABLE
         break;
 #endif // SOC_RMT_SUPPORT_XTAL
 #if SOC_RMT_SUPPORT_REF_TICK
@@ -186,7 +192,6 @@ esp_err_t rmt_apply_carrier(rmt_channel_handle_t channel, const rmt_carrier_conf
 esp_err_t rmt_del_channel(rmt_channel_handle_t channel)
 {
     ESP_RETURN_ON_FALSE(channel, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
-    ESP_RETURN_ON_FALSE(channel->fsm == RMT_FSM_INIT, ESP_ERR_INVALID_STATE, TAG, "channel not in init state");
     gpio_reset_pin(channel->gpio_num);
     return channel->del(channel);
 }
@@ -194,13 +199,57 @@ esp_err_t rmt_del_channel(rmt_channel_handle_t channel)
 esp_err_t rmt_enable(rmt_channel_handle_t channel)
 {
     ESP_RETURN_ON_FALSE(channel, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
-    ESP_RETURN_ON_FALSE(channel->fsm == RMT_FSM_INIT, ESP_ERR_INVALID_STATE, TAG, "channel not in init state");
     return channel->enable(channel);
 }
 
 esp_err_t rmt_disable(rmt_channel_handle_t channel)
 {
     ESP_RETURN_ON_FALSE(channel, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
-    ESP_RETURN_ON_FALSE(channel->fsm == RMT_FSM_ENABLE, ESP_ERR_INVALID_STATE, TAG, "channel not in enable state");
     return channel->disable(channel);
+}
+
+bool rmt_set_intr_priority_to_group(rmt_group_t *group, int intr_priority)
+{
+    bool priority_conflict = false;
+    portENTER_CRITICAL(&group->spinlock);
+    if (group->intr_priority == RMT_GROUP_INTR_PRIORITY_UNINITALIZED) {
+        // intr_priority never allocated, accept user's value unconditionally
+        // intr_priority could only be set once here
+        group->intr_priority = intr_priority;
+    } else {
+        // group intr_priority already specified
+        // If interrupt priority specified before, it CANNOT BE CHANGED until `rmt_release_group_handle()` called
+        // So we have to check if the new priority specified conflicts with the old one
+        if (intr_priority) {
+            // User specified intr_priority, check if conflict or not
+            // Even though the `group->intr_priority` is 0, an intr_priority must have been specified automatically too,
+            // although we do not know it exactly now, so specifying the intr_priority again might also cause conflict.
+            // So no matter if `group->intr_priority` is 0 or not, we have to check.
+            // Value `0` of `group->intr_priority` means "unknown", NOT "unspecified"!
+            if (intr_priority != (group->intr_priority)) {
+                // intr_priority conflicts!
+                priority_conflict = true;
+            }
+        }
+        // else do nothing
+        // user did not specify intr_priority, then keep the old priority
+        // We'll use the `RMT_INTR_ALLOC_FLAG | RMT_ALLOW_INTR_PRIORITY_MASK`, which should always success
+    }
+    // The `group->intr_priority` will not change any longer, even though another task tries to modify it.
+    // So we could exit critical here safely.
+    portEXIT_CRITICAL(&group->spinlock);
+    return priority_conflict;
+}
+
+int rmt_get_isr_flags(rmt_group_t *group)
+{
+    int isr_flags = RMT_INTR_ALLOC_FLAG;
+    if (group->intr_priority) {
+        // Use user-specified priority bit
+        isr_flags |= (1 << (group->intr_priority));
+    } else {
+        // Allow all LOWMED priority bits
+        isr_flags |= RMT_ALLOW_INTR_PRIORITY_MASK;
+    }
+    return isr_flags;
 }

@@ -214,6 +214,10 @@ tBTM_CMPL_CB        *p_tx_power_cmpl_cb;/* Callback function to be called       
 TIMER_LIST_ENT       afh_channels_timer;
 tBTM_CMPL_CB        *p_afh_channels_cmpl_cb; /* Callback function to be called  When */
 /* set AFH channels is completed   */
+
+TIMER_LIST_ENT       set_acl_pkt_types_timer;
+tBTM_CMPL_CB         *p_set_acl_pkt_types_cmpl_cb; /* Callback function to be called when */
+/* set ACL packet types is completed */
 #endif
 
 DEV_CLASS            dev_class;         /* Local device class                   */
@@ -431,6 +435,7 @@ typedef struct {
 #define BTM_SCO_XMIT_QUEUE_HIGH_WM  20
     fixed_queue_t   *xmit_data_q;       /* SCO data transmitting queue  */
     INT16           sent_not_acked;
+    tBTM_SCO_PKT_STAT_NUMS pkt_stat_nums;
 #endif
     tBTM_SCO_CB     *p_conn_cb;         /* Callback for when connected  */
     tBTM_SCO_CB     *p_disc_cb;         /* Callback for when disconnect */
@@ -1040,6 +1045,7 @@ tACL_CONN    *btm_handle_to_acl (UINT16 hci_handle);
 void         btm_read_link_policy_complete (UINT8 *p);
 void         btm_read_rssi_complete (UINT8 *p);
 void         btm_read_tx_power_complete (UINT8 *p, BOOLEAN is_ble);
+void         btm_acl_pkt_types_changed(UINT8 status, UINT16 handle, UINT16 pkt_types);
 void         btm_read_link_quality_complete (UINT8 *p);
 tBTM_STATUS  btm_set_packet_types (tACL_CONN *p, UINT16 pkt_types);
 void         btm_process_clk_off_comp_evt (UINT16 hci_handle, UINT16 clock_offset);
@@ -1084,6 +1090,9 @@ void btm_qos_setup_timeout (void *p_tle);
 void btm_create_sync_callback(UINT8 status);
 void btm_set_phy_callback(UINT8 status);
 void btm_read_phy_callback(uint8_t hci_status, uint16_t conn_handle, uint8_t tx_phy, uint8_t rx_phy);
+#endif
+#if (BLE_FEAT_PERIODIC_ADV_SYNC_TRANSFER == TRUE)
+void btm_ble_periodic_adv_sync_trans_complete(UINT16 op_code, UINT8 hci_status, UINT16 conn_handle);
 #endif
 /* Internal functions provided by btm_sco.c
 ********************************************

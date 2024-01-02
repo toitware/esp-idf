@@ -76,21 +76,23 @@ config BT_L2CAP_ENABLED
         This enables the Logical Link Control and Adaptation Layer Protocol.
         Only supported classic bluetooth.
 
-config BT_HFP_ENABLE
+menuconfig BT_HFP_ENABLE
     bool "Hands Free/Handset Profile"
     depends on BT_CLASSIC_ENABLED
     default n
+    help
+        Hands Free Unit and Audio Gateway can be included simultaneously
+        but they cannot run simultaneously due to internal limitations.
 
-choice BT_HFP_ROLE
-    prompt "Hands-free Profile Role configuration"
+config BT_HFP_CLIENT_ENABLE
+    bool "Hands Free Unit"
     depends on BT_HFP_ENABLE
+    default y
 
-    config BT_HFP_CLIENT_ENABLE
-        bool "Hands Free Unit"
-
-    config BT_HFP_AG_ENABLE
-        bool "Audio Gateway"
-endchoice
+config BT_HFP_AG_ENABLE
+    bool "Audio Gateway"
+    depends on BT_HFP_ENABLE
+    default y
 
 choice BT_HFP_AUDIO_DATA_PATH
     prompt "audio(SCO) data path"
@@ -114,26 +116,26 @@ config BT_HFP_WBS_ENABLE
         This enables Wide Band Speech. Should disable it when SCO data path is PCM.
         Otherwise there will be no data transmited via GPIOs.
 
-config BT_HID_ENABLED
+
+menuconfig BT_HID_ENABLED
     bool "Classic BT HID"
     depends on BT_CLASSIC_ENABLED
     default n
     help
         This enables the BT HID Host
 
-choice BT_HID_ROLE
-    prompt "Profile Role configuration"
+config BT_HID_HOST_ENABLED
+    bool "Classic BT HID Host"
     depends on BT_HID_ENABLED
-    config BT_HID_HOST_ENABLED
-        bool "Classic BT HID Host"
-        help
-            This enables the BT HID Host
+    default n
+    help
+        This enables the BT HID Host
 
-    config BT_HID_DEVICE_ENABLED
-        bool "Classic BT HID Device"
-        help
-            This enables the BT HID Device
-endchoice
+config BT_HID_DEVICE_ENABLED
+    bool "Classic BT HID Device"
+    depends on BT_HID_ENABLED
+    help
+        This enables the BT HID Device
 
 config BT_SSP_ENABLED
     bool "Secure Simple Pairing"
@@ -215,6 +217,27 @@ config BT_GATTS_SEND_SERVICE_CHANGE_MODE
     default 1 if BT_GATTS_SEND_SERVICE_CHANGE_MANUAL
     default 0
 
+config BT_GATTS_ROBUST_CACHING_ENABLED
+    bool "Enable Robust Caching on Server Side"
+    depends on BT_GATTS_ENABLE
+    default n
+    help
+        This option enable gatt robust caching feature on server
+
+config BT_GATTS_DEVICE_NAME_WRITABLE
+    bool "Allow to write device name by GATT clients"
+    depends on BT_GATTS_ENABLE
+    default n
+    help
+        Enabling this option allows remote GATT clients to write device name
+
+config BT_GATTS_APPEARANCE_WRITABLE
+    bool "Allow to write appearance by GATT clients"
+    depends on BT_GATTS_ENABLE
+    default n
+    help
+        Enabling this option allows remote GATT clients to write appearance
+
 config BT_GATTC_ENABLE
     bool "Include GATT client module(GATTC)"
     depends on BT_BLE_ENABLED
@@ -229,6 +252,14 @@ config BT_GATTC_MAX_CACHE_CHAR
     default 40
     help
         Maximum GATTC cache characteristic count
+
+config BT_GATTC_NOTIF_REG_MAX
+    int "Max gattc notify(indication) register number"
+    depends on BT_GATTC_ENABLE
+    range 1 64
+    default 5
+    help
+        Maximum GATTC notify(indication) register number
 
 config BT_GATTC_CACHE_NVS_FLASH
     bool "Save gattc cache data to nvs flash"
@@ -1021,7 +1052,7 @@ config BT_ACL_CONNECTIONS
 
 config BT_MULTI_CONNECTION_ENBALE
     bool "Enable BLE multi-conections"
-    depends on BT_BLUEDROID_ENABLED
+    depends on BT_BLE_ENABLED
     default y
     help
         Enable this option if there are multiple connections
@@ -1042,7 +1073,7 @@ config BT_BLE_DYNAMIC_ENV_MEMORY
 
 config BT_BLE_HOST_QUEUE_CONG_CHECK
     bool "BLE queue congestion check"
-    depends on BT_BLUEDROID_ENABLED
+    depends on BT_BLE_ENABLED
     default n
     help
         When scanning and scan duplicate is not enabled, if there are a lot of adv packets around
@@ -1067,7 +1098,7 @@ config BT_BLE_ACT_SCAN_REP_ADV_SCAN
 
 config BT_BLE_ESTAB_LINK_CONN_TOUT
     int "Timeout of BLE connection establishment"
-    depends on BT_BLUEDROID_ENABLED
+    depends on BT_BLE_ENABLED
     range 1 60
     default 30
     help
@@ -1100,16 +1131,54 @@ config BT_BLE_RPA_SUPPORTED
         For other BLE chips, devices support network privacy mode and device privacy mode,
         users can switch the two modes according to their own needs. So this option is enabled by default.
 
+config BT_BLE_RPA_TIMEOUT
+    int "Timeout of resolvable private address"
+    depends on BT_BLE_ENABLED
+    range 1 3600
+    default 900
+    help
+        This set RPA timeout of Controller and Host.
+        Default is 900 s (15 minutes). Range is 1 s to 1 hour (3600 s).
+
 config BT_BLE_50_FEATURES_SUPPORTED
     bool "Enable BLE 5.0 features"
-    depends on (BT_BLUEDROID_ENABLED && (IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32S3 || SOC_ESP_NIMBLE_CONTROLLER))
+    depends on (BT_BLE_ENABLED && (IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32S3 || SOC_ESP_NIMBLE_CONTROLLER))
     default y
     help
-        This enables BLE 5.0 features, this option only support esp32c3/esp32s3 chip
+        Enabling this option activates BLE 5.0 features.
+        This option is universally supported in chips that support BLE, except for ESP32.
 
 config BT_BLE_42_FEATURES_SUPPORTED
     bool "Enable BLE 4.2 features"
-    depends on (BT_BLUEDROID_ENABLED && (IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32S3 || SOC_ESP_NIMBLE_CONTROLLER))
+    depends on (BT_BLE_ENABLED && (IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32S3 || SOC_ESP_NIMBLE_CONTROLLER))
     default n
     help
         This enables BLE 4.2 features.
+
+config BT_BLE_FEAT_PERIODIC_ADV_SYNC_TRANSFER
+    bool "Enable BLE periodic advertising sync transfer feature"
+    depends on (BT_BLE_50_FEATURES_SUPPORTED && SOC_ESP_NIMBLE_CONTROLLER)
+    default n
+    help
+        This enables BLE periodic advertising sync transfer feature
+
+config BT_BLE_FEAT_PERIODIC_ADV_ENH
+    bool "Enable periodic adv enhancements(adi support)"
+    depends on (BT_BLE_50_FEATURES_SUPPORTED && SOC_ESP_NIMBLE_CONTROLLER)
+    default n
+    help
+        Enable the periodic advertising enhancements
+
+config BT_BLE_FEAT_CREATE_SYNC_ENH
+    bool "Enable create sync enhancements(reporting disable and duplicate filtering enable support)"
+    depends on (BT_BLE_50_FEATURES_SUPPORTED && SOC_ESP_NIMBLE_CONTROLLER)
+    default n
+    help
+        Enable the create sync enhancements
+
+config BT_BLE_HIGH_DUTY_ADV_INTERVAL
+    bool "Enable BLE high duty advertising interval feature"
+    depends on BT_BLE_ENABLED
+    default n
+    help
+        This enable BLE high duty advertising interval feature

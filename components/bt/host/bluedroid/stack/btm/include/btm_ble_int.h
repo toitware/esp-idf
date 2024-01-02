@@ -84,8 +84,10 @@
 typedef UINT8   tBTM_BLE_SEC_REQ_ACT;
 
 #define BLE_STATIC_PRIVATE_MSB_MASK          0x3f
-#define BLE_RESOLVE_ADDR_MSB                 0x40   /*  most significant bit, bit7, bit6 is 01 to be resolvable random */
+#define BLE_NON_RESOLVE_ADDR_MSB             0x00   /* most significant bit, bit7, bit6 is 00 to be non-resolvable random */
+#define BLE_RESOLVE_ADDR_MSB                 0x40   /* most significant bit, bit7, bit6 is 01 to be resolvable random */
 #define BLE_RESOLVE_ADDR_MASK                0xc0   /* bit 6, and bit7 */
+#define BTM_BLE_IS_NON_RESLVE_BDA(x)        ((x[0] & BLE_RESOLVE_ADDR_MASK) == BLE_NON_RESOLVE_ADDR_MSB)
 #define BTM_BLE_IS_RESOLVE_BDA(x)           ((x[0] & BLE_RESOLVE_ADDR_MASK) == BLE_RESOLVE_ADDR_MSB)
 
 /* LE scan activity bit mask, continue with LE inquiry bits */
@@ -143,8 +145,6 @@ typedef struct {
 
 #define BTM_BLE_ISVALID_PARAM(x, min, max)  (((x) >= (min) && (x) <= (max)) || ((x) == BTM_BLE_CONN_PARAM_UNDEF))
 
-#define BTM_BLE_PRIVATE_ADDR_INT    900  /* 15 minutes minimum for random address refreshing */
-
 typedef struct {
     UINT16 discoverable_mode;
     UINT16 connectable_mode;
@@ -159,6 +159,7 @@ typedef struct {
     tBTM_BLE_SFP sfp; /* scanning filter policy */
     tBTM_START_ADV_CMPL_CBACK *p_adv_cb;
     tBTM_START_STOP_ADV_CMPL_CBACK *p_stop_adv_cb;
+    tBTM_CLEAR_ADV_CMPL_CBACK *p_clear_adv_cb;
     tBLE_ADDR_TYPE adv_addr_type;
     UINT8 evt_type;
     UINT8 adv_mode;
@@ -534,6 +535,10 @@ void btm_ble_periodic_adv_report_evt(tBTM_PERIOD_ADV_REPORT *params);
 void btm_ble_periodic_adv_sync_lost_evt(tBTM_BLE_PERIOD_ADV_SYNC_LOST *params);
 void btm_ble_periodic_adv_sync_establish_evt(tBTM_BLE_PERIOD_ADV_SYNC_ESTAB *params);
 #endif // #if (BLE_50_FEATURE_SUPPORT == TRUE)
+
+#if (BLE_FEAT_PERIODIC_ADV_SYNC_TRANSFER == TRUE)
+void btm_ble_periodic_adv_sync_trans_recv_evt(tBTM_BLE_PERIOD_ADV_SYNC_TRANS_RECV *params);
+#endif // #if (BLE_FEAT_PERIODIC_ADV_SYNC_TRANSFER == TRUE)
 
 /*
 #ifdef __cplusplus

@@ -445,7 +445,6 @@ components/esp_hid/private/bt_hidd.h
 components/esp_hid/private/bt_hidh.h
 components/esp_hid/private/esp_hidd_private.h
 components/esp_hid/src/esp_hid_common.c
-components/esp_hid/src/esp_hidd.c
 components/esp_hid/test/hid_descriptor.h
 components/esp_hid/test/test_esp_hid.c
 components/esp_hw_support/include/esp_clk.h
@@ -686,7 +685,6 @@ components/hal/esp32c3/include/hal/mpu_ll.h
 components/hal/esp32c3/include/hal/sha_ll.h
 components/hal/esp32c3/include/hal/spi_flash_encrypted_ll.h
 components/hal/esp32c3/include/hal/uhci_ll.h
-components/hal/esp32c3/include/hal/usb_serial_jtag_ll.h
 components/hal/esp32c3/rtc_cntl_hal.c
 components/hal/esp32h2/hmac_hal.c
 components/hal/esp32h2/include/hal/aes_ll.h
@@ -698,7 +696,6 @@ components/hal/esp32h2/include/hal/sha_ll.h
 components/hal/esp32h2/include/hal/spi_flash_encrypted_ll.h
 components/hal/esp32h2/include/hal/uhci_ll.h
 components/hal/esp32h2/include/hal/uhci_types.h
-components/hal/esp32h2/include/hal/usb_serial_jtag_ll.h
 components/hal/esp32s2/include/hal/aes_ll.h
 components/hal/esp32s2/include/hal/crypto_dma_ll.h
 components/hal/esp32s2/include/hal/dac_hal.h
@@ -714,7 +711,6 @@ components/hal/esp32s3/include/hal/sha_ll.h
 components/hal/esp32s3/include/hal/spi_flash_encrypted_ll.h
 components/hal/esp32s3/include/hal/uhci_ll.h
 components/hal/esp32s3/include/hal/usb_ll.h
-components/hal/esp32s3/include/hal/usb_serial_jtag_ll.h
 components/hal/include/hal/aes_hal.h
 components/hal/include/hal/aes_types.h
 components/hal/include/hal/dac_hal.h
@@ -742,7 +738,6 @@ components/hal/spi_flash_encrypt_hal_iram.c
 components/hal/spi_flash_hal_gpspi.c
 components/hal/spi_slave_hal.c
 components/hal/spi_slave_hal_iram.c
-components/hal/spi_slave_hd_hal.c
 components/hal/test/test_mpu.c
 components/hal/touch_sensor_hal.c
 components/hal/twai_hal_iram.c
@@ -799,8 +794,6 @@ components/mbedtls/esp_crt_bundle/test_gen_crt_bundle/test_gen_crt_bundle.py
 components/mbedtls/port/aes/block/esp_aes.c
 components/mbedtls/port/aes/dma/esp_aes.c
 components/mbedtls/port/aes/dma/esp_aes_crypto_dma_impl.c
-components/mbedtls/port/aes/dma/esp_aes_gdma_impl.c
-components/mbedtls/port/aes/dma/include/esp_aes_dma_priv.h
 components/mbedtls/port/aes/esp_aes_xts.c
 components/mbedtls/port/include/aes/esp_aes.h
 components/mbedtls/port/include/aes/esp_aes_internal.h
@@ -985,7 +978,6 @@ components/soc/esp32c3/include/soc/sensitive_struct.h
 components/soc/esp32c3/include/soc/soc_pins.h
 components/soc/esp32c3/include/soc/spi_mem_reg.h
 components/soc/esp32c3/include/soc/spi_pins.h
-components/soc/esp32c3/include/soc/spi_reg.h
 components/soc/esp32c3/include/soc/system_reg.h
 components/soc/esp32c3/include/soc/system_struct.h
 components/soc/esp32c3/include/soc/systimer_reg.h
@@ -1069,9 +1061,7 @@ components/soc/esp32s2/include/soc/sdmmc_pins.h
 components/soc/esp32s2/include/soc/sens_reg.h
 components/soc/esp32s2/include/soc/sensitive_reg.h
 components/soc/esp32s2/include/soc/soc_ulp.h
-components/soc/esp32s2/include/soc/spi_mem_reg.h
 components/soc/esp32s2/include/soc/spi_pins.h
-components/soc/esp32s2/include/soc/spi_reg.h
 components/soc/esp32s2/include/soc/systimer_reg.h
 components/soc/esp32s2/include/soc/systimer_struct.h
 components/soc/esp32s2/include/soc/touch_sensor_channel.h
@@ -1163,7 +1153,6 @@ components/soc/esp32s3/include/soc/usb_types.h
 components/soc/esp32s3/include/soc/usb_wrap_reg.h
 components/soc/esp32s3/include/soc/usb_wrap_struct.h
 components/soc/esp32s3/include/soc/wdev_reg.h
-components/soc/esp32s3/interrupts.c
 components/soc/esp32s3/ledc_periph.c
 components/soc/esp32s3/rtc_io_periph.c
 components/soc/esp32s3/sdio_slave_periph.c
@@ -1246,7 +1235,6 @@ components/wifi_provisioning/src/scheme_console.c
 components/wifi_provisioning/src/wifi_config.c
 components/wifi_provisioning/src/wifi_provisioning_priv.h
 components/wifi_provisioning/src/wifi_scan.c
-components/wpa_supplicant/esp_supplicant/src/esp_scan_i.h
 components/wpa_supplicant/esp_supplicant/src/esp_wpa3_i.h
 components/wpa_supplicant/esp_supplicant/src/esp_wpa_err.h
 components/wpa_supplicant/include/utils/wpa_debug.h
@@ -1829,7 +1817,6 @@ examples/wifi/roaming/main/roaming_example.c
 examples/wifi/scan/main/scan.c
 examples/wifi/smart_config/main/smartconfig_main.c
 examples/wifi/wifi_easy_connect/dpp-enrollee/main/dpp_enrollee_main.c
-examples/wifi/wifi_enterprise/main/wifi_enterprise_main.c
 examples/wifi/wps/main/wps.c
 tools/ble/lib_ble_client.py
 tools/ble/lib_gap.py
