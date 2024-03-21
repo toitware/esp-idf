@@ -8,7 +8,6 @@ tools/ci/check_copyright_config.yaml
 tools/ci/get_all_test_results.py
 tools/gdb_panic_server.py
 tools/check_term.py
-tools/check_python_dependencies.py
 tools/python_version_checker.py
 tools/generate_debug_prefix_map.py
 tools/ci/checkout_project_ref.py
@@ -38,4 +37,5 @@ tools/mocks/**/*
 tools/set-submodules-to-github.sh
 tools/templates/sample_component/CMakeLists.txt
 tools/templates/sample_component/include/main.h
+tools/ci/get_known_failure_cases_file.py
 tools/templates/sample_component/main.c

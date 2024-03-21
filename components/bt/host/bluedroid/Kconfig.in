@@ -29,7 +29,7 @@ config BT_BLUEDROID_PINNED_TO_CORE
 config BT_BTU_TASK_STACK_SIZE
     int "Bluetooth Bluedroid Host Stack task stack size"
     depends on BT_BLUEDROID_ENABLED
-    default 4096
+    default 4352
     help
         This select btu task stack size
 
@@ -222,7 +222,10 @@ config BT_GATTS_ROBUST_CACHING_ENABLED
     depends on BT_GATTS_ENABLE
     default n
     help
-        This option enable gatt robust caching feature on server
+        This option enables the GATT robust caching feature on the server.
+        if turned on, the Client Supported Features characteristic, Database Hash characteristic,
+        and Server Supported Features characteristic will be included in the GAP SERVICE.
+
 
 config BT_GATTS_DEVICE_NAME_WRITABLE
     bool "Allow to write device name by GATT clients"
@@ -271,7 +274,7 @@ config BT_GATTC_CACHE_NVS_FLASH
 config BT_GATTC_CONNECT_RETRY_COUNT
     int "The number of attempts to reconnect if the connection establishment failed"
     depends on BT_GATTC_ENABLE
-    range 0 7
+    range 0 255
     default 3
     help
         The number of attempts to reconnect if the connection establishment failed
@@ -1084,6 +1087,14 @@ config BT_SMP_ENABLE
     bool
     depends on BT_BLUEDROID_ENABLED
     default BT_CLASSIC_ENABLED || BT_BLE_SMP_ENABLE
+
+config BT_SMP_MAX_BONDS
+    int "BT/BLE maximum bond device count"
+    depends on BT_SMP_ENABLE
+    range 1 32
+    default 15
+    help
+        The number of security records for peer devices.
 
 config BT_BLE_ACT_SCAN_REP_ADV_SCAN
     bool "Report adv data and scan response individually when BLE active scan"
