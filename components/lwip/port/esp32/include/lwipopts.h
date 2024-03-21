@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: BSD-3-Clause
  *
- * SPDX-FileContributor: 2015-2023 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileContributor: 2015-2024 Espressif Systems (Shanghai) CO LTD
  */
 #ifndef LWIP_HDR_ESP_LWIPOPTS_H
 #define LWIP_HDR_ESP_LWIPOPTS_H
@@ -235,6 +235,11 @@ extern "C" {
  */
 #define IP_REASS_MAX_PBUFS              10
 
+/**
+ * IP_DEFAULT_TTL: Default value for Time-To-Live used by transport layers.
+ */
+#define IP_DEFAULT_TTL                   CONFIG_LWIP_IP_DEFAULT_TTL
+
 /*
    ----------------------------------
    ---------- ICMP options ----------
@@ -452,7 +457,7 @@ static inline uint32_t timeout_from_offered(uint32_t lease, uint32_t min)
 
 /** The maximum of DNS servers
  */
-#define DNS_MAX_SERVERS                 3
+#define DNS_MAX_SERVERS                 CONFIG_LWIP_DNS_MAX_SERVERS
 
 /** ESP specific option only applicable if ESP_DNS=1
  *
@@ -470,6 +475,14 @@ static inline uint32_t timeout_from_offered(uint32_t lease, uint32_t min)
 #else
 #define LWIP_DNS_SUPPORT_MDNS_QUERIES   0
 #endif
+
+#ifdef CONFIG_LWIP_FALLBACK_DNS_SERVER_SUPPORT
+#define FALLBACK_DNS_SERVER_ADDRESS(address)                           \
+        do {    ip_addr_t *server_dns = address;                            \
+                char server_ip[] = CONFIG_LWIP_FALLBACK_DNS_SERVER_ADDRESS; \
+                ipaddr_aton(server_ip, server_dns);                         \
+        } while (0)
+#endif /* CONFIG_LWIP_FALLBACK_DNS_SERVER_SUPPORT */
 
 /*
    ---------------------------------
@@ -1538,6 +1551,7 @@ static inline uint32_t timeout_from_offered(uint32_t lease, uint32_t min)
 #define ESP_LWIP_LOCK                   1
 #define ESP_THREAD_PROTECTION           1
 #define LWIP_SUPPORT_CUSTOM_PBUF        1
+#define ESP_LWIP_FALLBACK_DNS_PREFER_IPV4 0
 
 /*
    -----------------------------------------
