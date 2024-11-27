@@ -387,6 +387,7 @@ SECTIONS
     *(.tbss)
     *(.tbss.*)
     _thread_local_end = ABSOLUTE(.);
+    . += _esp_rodata_section_padding;
     _rodata_reserved_end = ABSOLUTE(.);
     . = ALIGN(ALIGNOF(.eh_frame));
   } > default_rodata_seg

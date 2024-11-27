@@ -29,8 +29,8 @@ _esp_mmu_block_size = 0;
 _esp_mmu_block_size = (CONFIG_MMU_PAGE_SIZE);
 #endif
 
-#ifdef CONFIG_SPIRAM_RODATA_PADDING
-_esp_rodata_section_padding = CONFIG_SPIRAM_RODATA_PADDING;
+#ifdef CONFIG_RODATA_PADDING
+_esp_rodata_section_padding = CONFIG_RODATA_PADDING;
 #else
 _esp_rodata_section_padding = 0;
 #endif
