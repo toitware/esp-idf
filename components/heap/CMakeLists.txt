@@ -13,11 +13,19 @@ set(srcs
     "heap_caps_init.c"
     "multi_heap.c")
 
+if(CONFIG_CMPCT_MALLOC_HEAP)
+    list(APPEND srcs "third_party/dartino/cmpctmalloc.c")
+endif()
+
 set(includes "include")
 
-if(NOT CONFIG_HEAP_TLSF_USE_ROM_IMPL)
-    set(priv_includes "tlsf")
-    list(APPEND srcs "tlsf/tlsf.c")
+if(NOT CONFIG_CMPCT_MALLOC_HEAP)
+    list(APPEND srcs "multi_heap.c")
+
+    if(NOT CONFIG_HEAP_TLSF_USE_ROM_IMPL)
+        set(priv_includes "tlsf")
+        list(APPEND srcs "tlsf/tlsf.c")
+    endif()
 endif()
 
 if(NOT CONFIG_HEAP_POISONING_DISABLED)

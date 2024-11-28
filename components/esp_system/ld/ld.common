@@ -29,6 +29,12 @@ _esp_mmu_block_size = 0;
 _esp_mmu_block_size = (CONFIG_MMU_PAGE_SIZE);
 #endif
 
+#ifdef CONFIG_RODATA_PADDING
+_esp_rodata_section_padding = CONFIG_RODATA_PADDING;
+#else
+_esp_rodata_section_padding = 0;
+#endif
+
 #if CONFIG_SOC_RTC_MEM_SUPPORTED
     #if CONFIG_BOOTLOADER_RESERVE_RTC_MEM
         #ifdef CONFIG_BOOTLOADER_CUSTOM_RESERVE_RTC
