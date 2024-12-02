@@ -1,0 +1,66 @@
+# How to update the Toit fork
+
+Start by fetching upstream:
+```
+git add remote upstream https://github.com/espressif/esp-idf.git
+git fetch upstream
+```
+
+Get the Toit commits as follows:
+```
+git rev-list --reverse --no-merges release/v5.1..patch-head-5.1
+```
+Replace `release/v5.1` with the tag of the base release and `patch-head-5.1`
+with the branch that contains the patches.
+
+There shouldn't be too many patches. Consider going through them manually to
+see if they are still relevant. For example, multiple sub-component rolls
+could sometimes be squashed into a single commit.
+
+Add `--oneline` to the `git rev-list` command to get a description with the
+commit hash.
+
+## Create a new patch-head
+Check out the tag you want to base Toit's fork on:
+```
+git checkout v5.3.1
+```
+
+Note: we used to base our fork on the `release/vX.Y` branches, but
+tags seem safer and there doesn't seem to be an upside to using the
+branches.
+
+Create a new branch for the patches:
+```
+git checkout -b patch-head-5.3.1
+```
+
+## Apply Toit's patches
+
+Apply the patches to the fork:
+```
+git rev-list ... | xargs git cherry-pick
+```
+If you are lucky and all patches apply cleanly, you are done. Otherwise, you
+will have to resolve conflicts manually. In this case I apply the patches
+one by one and resolve conflicts as they come up.
+
+## Mbedtls
+
+Move into the mbedtls directory:
+```
+cd components/mbedtls/mbedtls
+```
+
+Find the mbedtls commit that is used in the ESP-IDF version:
+```
+git log -n1 --oneline
+```
+
+Switch to Toit's mbedtls fork and check out that commit.
+Then apply Toit's patches to it. Follow the same instructions as
+for the ESP-IDF patches.
+
+Upload the mbedtls branch and check them out in the ESP-IDF repo. This
+is a typical submodule update.
+
