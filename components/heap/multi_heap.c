@@ -25,14 +25,14 @@
 /* Defines compile-time configuration macros */
 #include "multi_heap_config.h"
 
-#if (!defined MULTI_HEAP_POISONING)
+#if (!defined MULTI_HEAP_POISONING) && (!defined CONFIG_CMPCT_MALLOC_HEAP)
 
 void *multi_heap_aligned_alloc_offs(multi_heap_handle_t heap, size_t size, size_t alignment, size_t offset)
 {
     return multi_heap_aligned_alloc_impl_offs(heap, size, alignment, offset);
 }
 
-#if (!defined CONFIG_HEAP_TLSF_USE_ROM_IMPL) && (!defined CONFIG_CMPCT_MALLOC_HEAP)
+#if (!defined CONFIG_HEAP_TLSF_USE_ROM_IMPL)
 /* if no heap poisoning, public API aliases directly to these implementations */
 void *multi_heap_malloc(multi_heap_handle_t heap, size_t size)
     __attribute__((alias("multi_heap_malloc_impl")));
@@ -80,8 +80,8 @@ void multi_heap_iterate_tagged_memory_areas(multi_heap_handle_t heap, void *user
 {
 }
 
-#endif // !CONFIG_HEAP_TLSF_USE_ROM_IMPL && !CONFIG_CMPCT_MALLOC_HEAP
-#endif // !MULTI_HEAP_POISONING
+#endif // !CONFIG_HEAP_TLSF_USE_ROM_IMPL
+#endif // !MULTI_HEAP_POISONING && !CONFIG_CMPCT_MALLOC_HEAP
 
 
 #define ALIGN(X) ((X) & ~(sizeof(void *)-1))

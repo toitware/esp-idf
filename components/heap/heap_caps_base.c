@@ -79,11 +79,19 @@ HEAP_IRAM_ATTR void heap_caps_free( void *ptr)
 }
 
 HEAP_IRAM_ATTR static inline void *aligned_or_unaligned_alloc(multi_heap_handle_t heap, size_t size, size_t alignment, size_t offset) {
+#ifdef CONFIG_CMPCT_MALLOC_HEAP
+    if (offset != 0) {
+        ESP_LOGE("heap_caps", "Offset is not supported in compact malloc");
+        return NULL;
+    }
+    return multi_heap_aligned_alloc(heap, size, alignment);
+#else
     if (alignment<=UNALIGNED_MEM_ALIGNMENT_BYTES) { //alloc and friends align to 32-bit by default
         return multi_heap_malloc(heap, size);
     } else {
         return multi_heap_aligned_alloc_offs(heap, size, alignment, offset);
     }
+#endif
 }
 
 /*
