@@ -407,7 +407,7 @@ IRAM_ATTR static int size_to_index_helper(
     // 104, 112, 120.  Then we have row 4, sizes 128 and up, with the
     // row-column 8 and up.
     unsigned answer = row_column + 15 - 32;
-    if (answer >= NUMBER_OF_BUCKETS) FATAL("Invalid free");
+    if (answer >= NUMBER_OF_BUCKETS) FATAL("Invalid size");
     return answer;
 }
 
@@ -1355,7 +1355,7 @@ IRAM_ATTR void *cmpct_aligned_alloc_impl(cmpct_heap_t *heap, size_t size, size_t
         return result;
     }
 
-    if (alignment <= NATURAL_ALIGNMENT) return cmpct_alloc(heap, size);
+    if (alignment <= NATURAL_ALIGNMENT) return cmpct_malloc_impl(heap, size);
 
     size = ROUND_UP(size, NATURAL_ALIGNMENT);
 
