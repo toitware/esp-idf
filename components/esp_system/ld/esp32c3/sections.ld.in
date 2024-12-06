@@ -414,8 +414,13 @@ SECTIONS
      * driver to maintain the virtual address.
      * NOLOAD rodata may not be included in this section.
      */
+    /**
+     * Toit: add padding.
+     * Not completely sure this is the correct way of doing this, but we need to
+     * reserve space for the Toit containers.
+     */
     . += _esp_rodata_section_padding;
-    _rodata_reserved_end = ADDR(.flash.tbss);
+    _rodata_reserved_end = ADDR(.flash.tbss) + _esp_rodata_section_padding;
 
     mapping[rodata_noload]
   } > default_rodata_seg
