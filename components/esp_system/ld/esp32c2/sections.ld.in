@@ -297,7 +297,7 @@ SECTIONS
      * NOLOAD rodata may not be included in this section.
      */
     . += _esp_rodata_section_padding;
-    _rodata_reserved_end = ADDR(.flash.tbss);
+    _rodata_reserved_end = ADDR(.flash.tbss) + _esp_rodata_section_padding;
 
     mapping[rodata_noload]
   } > default_rodata_seg
