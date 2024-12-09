@@ -99,6 +99,15 @@ void multi_heap_set_option(cmpct_heap_t *heap, int option, void *value)
 void *multi_heap_get_option(int option)
     __attribute__((alias("cmpct_get_option")));
 
+void multi_heap_set_lock(cmpct_heap_t *heap, void *lock)
+    __attribute__((alias("cmpct_set_lock_impl")));
+
+void multi_heap_internal_lock(cmpct_heap_t *heap, void *lock)
+    __attribute__((alias("cmpct_internal_lock_impl")));
+
+void multi_heap_internal_unlock(cmpct_heap_t *heap, void *lock)
+    __attribute__((alias("cmpct_internal_unlock_impl")));
+
 typedef uintptr_t addr_t;
 typedef uintptr_t vaddr_t;
 
@@ -1798,9 +1807,23 @@ IRAM_ATTR static void page_free(cmpct_heap_t *heap, void *address, int page_coun
     heap->pages[page].status = PAGE_FREE;
 }
 
-void multi_heap_set_lock(cmpct_heap_t *heap, void *lock)
+void cmpct_set_lock_impl(cmpct_heap_t *heap, void *lock)
 {
     heap->lock = lock;
+}
+
+void cmpct_internal_lock_impl(cmpct_heap_t *heap, void *lock)
+{
+    // This function should never be called, as it would indicate that
+    // some part of the original malloc implementation is still active.
+    FATAL("cmpct_internal_lock should not be called");
+}
+
+void cmpct_internal_unlock_impl(cmpct_heap_t *heap, void *lock)
+{
+    // This function should never be called, as it would indicate that
+    // some part of the original malloc implementation is still active.
+    FATAL("cmpct_internal_unlock should not be called");
 }
 
 void cmpct_set_option(cmpct_heap_t *heap, int option, void *value)
@@ -1833,6 +1856,11 @@ void *cmpct_get_option(int option)
 void cmpct_iterate_tagged_memory_areas(cmpct_heap_t *heap, void *user_data, void *tag, tagged_memory_callback_t callback, uint32_t flags)
 {
     if ((flags & CMPCTMALLOC_ITERATE_UNLOCKED) == 0) {
+        if (heap->lock == NULL) {
+            // Might not be the earliest time we can test for the lock, but
+            // it should still catch most cases.
+            FATAL("Heap lock not set");
+        }
         lock(heap);
     }
     bool iterate_heap_structure = (flags & CMPCTMALLOC_ITERATE_UNUSED) != 0;
