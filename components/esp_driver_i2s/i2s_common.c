@@ -456,26 +456,30 @@ uint32_t i2s_get_buf_size(i2s_chan_handle_t handle, uint32_t data_bit_width, uin
 esp_err_t i2s_free_dma_desc(i2s_chan_handle_t handle)
 {
     I2S_NULL_POINTER_CHECK(TAG, handle);
-    if (!handle->dma.desc) {
-        return ESP_OK;
-    }
-    for (int i = 0; i < handle->dma.desc_num; i++) {
-        if (handle->dma.bufs[i]) {
-            free(handle->dma.bufs[i]);
-            handle->dma.bufs[i] = NULL;
-        }
-        if (handle->dma.desc[i]) {
-            free(handle->dma.desc[i]);
-            handle->dma.desc[i] = NULL;
-        }
-    }
-    if (handle->dma.bufs) {
-        free(handle->dma.bufs);
-        handle->dma.bufs = NULL;
-    }
+    uint32_t desc_num = handle->dma.desc_num;
+    handle->dma.desc_num = 0;
+    handle->dma.buf_size = 0;
+
     if (handle->dma.desc) {
+        for (int i = 0; i < desc_num; i++) {
+            if (handle->dma.desc[i]) {
+                free(handle->dma.desc[i]);
+                handle->dma.desc[i] = NULL;
+            }
+        }
         free(handle->dma.desc);
         handle->dma.desc = NULL;
+    }
+
+    if (handle->dma.bufs) {
+        for (int i = 0; i < desc_num; i++) {
+            if (handle->dma.bufs[i]) {
+                free(handle->dma.bufs[i]);
+                handle->dma.bufs[i] = NULL;
+            }
+        }
+        free(handle->dma.bufs);
+        handle->dma.bufs = NULL;
     }
 
     return ESP_OK;

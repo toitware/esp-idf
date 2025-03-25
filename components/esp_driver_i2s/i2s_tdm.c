@@ -117,7 +117,6 @@ static esp_err_t i2s_tdm_set_slot(i2s_chan_handle_t handle, const i2s_tdm_slot_c
         ESP_RETURN_ON_ERROR(i2s_free_dma_desc(handle), TAG, "failed to free the old dma descriptor");
         ESP_RETURN_ON_ERROR(i2s_alloc_dma_desc(handle, handle->dma.desc_num, buf_size),
                             TAG, "allocate memory for dma descriptor failed");
-        handle->dma.buf_size = buf_size;
     }
     bool is_slave = handle->role == I2S_ROLE_SLAVE;
     /* Share bck and ws signal in full-duplex mode */
