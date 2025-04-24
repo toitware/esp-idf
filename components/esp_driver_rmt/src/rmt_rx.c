@@ -462,7 +462,11 @@ esp_err_t rmt_receive(rmt_channel_handle_t channel, void *buffer, size_t buffer_
 
     // saying we're in running state, this state will last until the receiving is done
     // i.e., we will switch back to the enable state in the receive done interrupt handler
-    atomic_store(&channel->fsm, RMT_FSM_RUN);
+    expected_fsm = RMT_FSM_RUN_WAIT;
+    // See https://github.com/espressif/esp-idf/issues/15842.
+    // The 'atomic_compare_exchange_strong' is a work-around for the issue.
+    // In case of a conflict with upstream, discard our change and use upstream.
+    atomic_compare_exchange_strong(&channel->fsm, &expected_fsm, RMT_FSM_RUN);
 
     return ESP_OK;
 }
