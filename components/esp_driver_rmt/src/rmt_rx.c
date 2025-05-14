@@ -581,7 +581,18 @@ static bool IRAM_ATTR rmt_isr_handle_rx_done(rmt_rx_channel_t *rx_chan)
     portENTER_CRITICAL_ISR(&channel->spinlock);
     // disable the RX engine, it will be enabled again when next time user calls `rmt_receive()`
     rmt_ll_rx_enable(hal->regs, channel_id, false);
+    int state = channel->fsm;
     portEXIT_CRITICAL_ISR(&channel->spinlock);
+
+    // work-around for https://github.com/espressif/esp-idf/issues/15948
+    // when the RX engine is disabled, but then enabled again, it continues
+    // reading the data as if it was still running. However, the user might
+    // have already removed the buffer.
+    // If the state isn't RMT_FSM_RUN, it means the RX engine was disabled
+    // and we shouldn't process the data.
+    if (state != RMT_FSM_RUN) {
+        return need_yield;
+    }
 
     uint32_t offset = rmt_ll_rx_get_memory_writer_offset(hal->regs, channel_id);
     // sanity check
