@@ -68,6 +68,8 @@ typedef struct {
  */
 typedef enum {
     UART_DATA,              /*!< UART data event*/
+    UART_TX_DONE,           /*!< UART TX done*/  // Toit extension.
+    UART_TX_ENTRY_RETIRED,  /*!< UART TX entry retired*/  // Toit extension.
     UART_BREAK,             /*!< UART break event*/
     UART_BUFFER_FULL,       /*!< UART RX buffer full event*/
     UART_FIFO_OVF,          /*!< UART FIFO overflow event*/
