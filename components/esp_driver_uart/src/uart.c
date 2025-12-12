@@ -87,6 +87,7 @@ static const char *UART_TAG = "uart";
                             | (UART_INTR_RXFIFO_TOUT) \
                             | (UART_INTR_RXFIFO_OVF) \
                             | (UART_INTR_BRK_DET) \
+                            | (UART_INTR_TX_DONE) /* Toit extension. */ \
                             | (UART_INTR_PARITY_ERR)) \
                             | (UART_INTR_WAKEUP)
 #else
@@ -94,6 +95,7 @@ static const char *UART_TAG = "uart";
                             | (UART_INTR_RXFIFO_TOUT) \
                             | (UART_INTR_RXFIFO_OVF) \
                             | (UART_INTR_BRK_DET) \
+                            | (UART_INTR_TX_DONE) /* Toit extension. */ \
                             | (UART_INTR_PARITY_ERR))
 #endif
 
@@ -1139,6 +1141,8 @@ static void UART_ISR_ATTR uart_rx_intr_handler_default(void *param)
                 if (p_uart->tx_buf_size == 0) {
                     continue;
                 }
+                // Toit extension.
+                bool retired = false;
                 bool en_tx_flg = false;
                 uint32_t tx_fifo_rem = uart_hal_get_txfifo_len(&(uart_context[uart_num].hal));
                 //We need to put a loop here, in case all the buffer items are very short.
@@ -1186,6 +1190,7 @@ static void UART_ISR_ATTR uart_rx_intr_handler_default(void *param)
                             need_yield |= (HPTaskAwoken == pdTRUE);
                             p_uart->tx_head = NULL;
                             p_uart->tx_ptr = NULL;
+                            retired = true;  // Toit extension.
                             //Sending item done, now we need to send break if there is a record.
                             //Set TX break signal after FIFO is empty
                             if (p_uart->trans_total_remaining_len == 0 && p_uart->tx_brk_flg == 1) {
@@ -1211,6 +1216,12 @@ static void UART_ISR_ATTR uart_rx_intr_handler_default(void *param)
                             //enable TX empty interrupt
                             en_tx_flg = true;
                         }
+                    }
+                }
+                {
+                    // Toit extension.
+                    if (retired) {
+                        uart_event.type = UART_TX_ENTRY_RETIRED;
                     }
                 }
                 if (en_tx_flg) {
@@ -1294,6 +1305,13 @@ static void UART_ISR_ATTR uart_rx_intr_handler_default(void *param)
                         } else if (pat_idx >= 0) {
                             // find the pattern in stash buffer.
                             uart_pattern_enqueue(uart_num, p_uart->rx_buffered_len + pat_idx);
+                        }
+                    }
+                    {
+                        // Toit extension:
+                        // No need to send a data event if there is already data queued.
+                        if (uart_event.type == UART_DATA && p_uart->rx_buffered_len > 0) {
+                            uart_event.type = UART_EVENT_MAX; // invalidate event
                         }
                     }
                     p_uart->rx_buffered_len += p_uart->rx_stash_len;
@@ -1408,6 +1426,17 @@ static void UART_ISR_ATTR uart_rx_intr_handler_default(void *param)
                 UART_EXIT_CRITICAL_ISR(&(uart_context[uart_num].spinlock));
                 xSemaphoreGiveFromISR(p_uart_obj[uart_num]->tx_done_sem, &HPTaskAwoken);
                 need_yield |= (HPTaskAwoken == pdTRUE);
+            }
+            {
+                // Toit extension.
+                // Inform the runtime that everything has been transmitted.
+                if (p_uart->trans_total_remaining_len == 0) {
+                    UBaseType_t items_waiting;
+                    vRingbufferGetInfo(p_uart->tx_ring_buf, NULL, NULL, NULL, NULL, &items_waiting);
+                    if (items_waiting == 0) {
+                        uart_event.type = UART_TX_DONE;
+                    }
+                }
             }
         }
 #if SOC_UART_SUPPORT_WAKEUP_INT
