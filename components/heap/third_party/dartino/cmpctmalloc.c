@@ -1366,6 +1366,17 @@ IRAM_ATTR void *cmpct_aligned_alloc_impl(cmpct_heap_t *heap, size_t size, size_t
 
     if (alignment <= NATURAL_ALIGNMENT) return cmpct_malloc_impl(heap, size);
 
+    // If the size is too large for the bucket allocator, use page_alloc
+    // directly.  Without this check, size_to_index_allocating will fatal
+    // for sizes above SMALL_ALLOCATION_LIMIT.
+    if (size >= SMALL_ALLOCATION_LIMIT) {
+        lock(heap);
+        void *tag = GET_THREAD_LOCAL_TAG;
+        void *result = page_alloc(heap, PAGES_FOR_BYTES(size), alignment, tag, /* for_malloc = */ false);
+        unlock(heap);
+        return result;
+    }
+
     size = ROUND_UP(size, NATURAL_ALIGNMENT);
 
     // Our approach to aligned allocations requires us to temporarily create a
