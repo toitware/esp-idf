@@ -216,6 +216,11 @@ static esp_err_t rmt_tx_destroy(rmt_tx_channel_t *tx_channel)
 {
     if (tx_channel->base.gpio_num >= 0) {
         gpio_output_disable(tx_channel->base.gpio_num);
+        // Toit: restore the default (push-pull) drive mode. `rmt_new_tx_channel()`
+        // may have switched the pin to open-drain; `gpio_output_disable()` does not
+        // clear that, so without this a later user of the pin (another RMT channel,
+        // a UART, plain GPIO, ...) would inherit the stale open-drain mode.
+        gpio_ll_od_disable(&GPIO, tx_channel->base.gpio_num);
         esp_gpio_revoke(BIT64(tx_channel->base.gpio_num));
     }
     if (tx_channel->base.intr) {
@@ -345,9 +350,14 @@ esp_err_t rmt_new_tx_channel(const rmt_tx_channel_config_t *config, rmt_channel_
     rmt_ll_tx_enable_carrier_modulation(hal->regs, channel_id, false);
     // idle level is determined by register value
     // Toit: work around https://github.com/espressif/esp-idf/issues/16068.
-    //   It should be possible to set the initial idle level, but to make things a bit easier, we
-    //   always set it to 1 for open-drain configurations. It's the safer and more useful option.
-    rmt_ll_tx_fix_idle_level(hal->regs, channel_id, config->flags.io_loop_back ? 1 : 0, true);
+    //   It should be possible to set the initial idle level, but to make things a bit
+    //   easier, we set it to 1 for open-drain configurations (the safer and more useful
+    //   option: the line is released/pulled-up while idle) and to 0 otherwise. This must
+    //   key on `io_od_mode`, not `io_loop_back` (which Toit sets on every channel): a
+    //   push-pull channel that idles high and then transmits with a done-level of 0 has
+    //   to switch its idle level just before starting, and on the ESP32 that switch is
+    //   recorded by a receiver as a spurious leading glitch.
+    rmt_ll_tx_fix_idle_level(hal->regs, channel_id, config->flags.io_od_mode ? 1 : 0, true);
     // always enable tx wrap, both DMA mode and ping-pong mode rely this feature
     rmt_ll_tx_enable_wrap(hal->regs, channel_id, true);
 
@@ -369,8 +379,16 @@ esp_err_t rmt_new_tx_channel(const rmt_tx_channel_config_t *config, rmt_channel_
     if (config->flags.io_loop_back) {
         gpio_ll_input_enable(&GPIO, config->gpio_num);
     }
+    // Toit: always establish the configured drive mode. The open-drain bit
+    // (`pad_driver`) is not cleared by `gpio_output_disable()` when a channel is
+    // deleted, so a pin previously used by an open-drain channel stays in open-drain
+    // mode. Without explicitly disabling it here, a later push-pull channel on the
+    // same pin can only drive the line low (high becomes high-Z), which silently
+    // breaks transmission to a receiver that has no pull-up.
     if (config->flags.io_od_mode) {
         gpio_ll_od_enable(&GPIO, config->gpio_num);
+    } else {
+        gpio_ll_od_disable(&GPIO, config->gpio_num);
     }
 
     portMUX_INITIALIZE(&tx_channel->base.spinlock);
