@@ -337,6 +337,19 @@ bool spi_bus_lock_touch(spi_bus_lock_dev_handle_t dev_handle);
 esp_err_t spi_bus_lock_acquire_start(spi_bus_lock_dev_handle_t dev_handle, TickType_t wait);
 
 /**
+ * Try to acquire the SPI bus without waiting.
+ *
+ * Unlike `spi_bus_lock_acquire_start`, a failed attempt does not leave a
+ * pending acquisition request behind.
+ *
+ * @param dev_handle Handle to the device requesting the bus.
+ * @return
+ *  - ESP_OK: acquired
+ *  - ESP_ERR_TIMEOUT: the bus is currently in use
+ */
+esp_err_t spi_bus_lock_try_acquire_start(spi_bus_lock_dev_handle_t dev_handle);
+
+/**
  * Release the bus acquired. Will pass the acquiring processor to other blocked
  * processors (tasks or ISR), and cause them to be unblocked or invoked.
  *
