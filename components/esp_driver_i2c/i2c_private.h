@@ -220,6 +220,8 @@ struct i2c_slave_dev_t {
     RingbufHandle_t tx_ring_buf;                      // transmit ringbuffer
     uint32_t rx_data_count;                           // receive data count
     i2c_slave_receive_t receive_desc;                 // slave receive descriptor
+    bool receive_overflow;                            // bytes were dropped in the current receive transaction
+    bool request_pending;                             // target is stretching at a read address match
 };
 
 #endif // CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2

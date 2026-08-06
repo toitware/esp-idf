@@ -108,6 +108,7 @@ typedef struct {
     uint8_t *buffer;  /**< Pointer for buffer received in callback. */
 #if CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2
     uint32_t length;      /**< Length for buffer received in callback. */
+    bool overflow;        /**< Whether bytes were discarded because the receive buffer was full. */
 #endif
 } i2c_slave_rx_done_event_data_t;
 
