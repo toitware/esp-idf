@@ -466,8 +466,11 @@ static inline void spi_ll_slave_set_mode(spi_dev_t *hw, const int mode, bool dma
         hw->ctrl2.mosi_delay_mode = 2;
         hw->ctrl2.mosi_delay_num = 2;
     } else if (mode == 1) {
-        hw->pin.ck_idle_edge = 1;
-        hw->user.ck_i_edge = 1;
+        // Without DMA, select the MOSI latch edge. The original settings
+        // sample at the controller's launch edge (IDFGH-6011). Keep the old
+        // DMA settings because the classic ESP32 DMA engine depends on them.
+        hw->pin.ck_idle_edge = dma_used ? 1 : 0;
+        hw->user.ck_i_edge = dma_used ? 1 : 0;
         hw->ctrl2.miso_delay_mode = 2;
         hw->ctrl2.miso_delay_num = 0;
         hw->ctrl2.mosi_delay_mode = 0;
@@ -481,8 +484,11 @@ static inline void spi_ll_slave_set_mode(spi_dev_t *hw, const int mode, bool dma
         hw->ctrl2.mosi_delay_mode = 1;
         hw->ctrl2.mosi_delay_num = 2;
     } else if (mode == 3) {
-        hw->pin.ck_idle_edge = 0;
-        hw->user.ck_i_edge = 0;
+        // Without DMA, select the MOSI latch edge. The original settings
+        // sample at the controller's launch edge (IDFGH-6011). Keep the old
+        // DMA settings because the classic ESP32 DMA engine depends on them.
+        hw->pin.ck_idle_edge = dma_used ? 0 : 1;
+        hw->user.ck_i_edge = dma_used ? 0 : 1;
         hw->ctrl2.miso_delay_mode = 1;
         hw->ctrl2.miso_delay_num = 0;
         hw->ctrl2.mosi_delay_mode = 0;
