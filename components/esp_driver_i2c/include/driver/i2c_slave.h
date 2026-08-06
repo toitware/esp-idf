@@ -167,6 +167,8 @@ typedef struct {
 typedef struct {
     i2c_slave_request_callback_t on_request;         /*!< Callback for when a master requests data from the slave */
     i2c_slave_received_callback_t on_receive;         /*!< Callback for when the slave receives data from the master */
+    i2c_slave_transmit_callback_t on_transmit;        /*!< Callback to synchronously provide requested data from ISR context */
+    i2c_slave_transmit_done_callback_t on_transmit_done; /*!< Callback reporting how many synchronously provided bytes were transmitted */
 } i2c_slave_event_callbacks_t;
 
 /**
