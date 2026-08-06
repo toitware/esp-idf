@@ -266,8 +266,15 @@ esp_err_t spi_slave_initialize(spi_host_device_t host, const spi_bus_config_t *b
     };
     spi_slave_hal_init(hal, &hal_config);
 
+#if CONFIG_IDF_TARGET_ESP32
+    // On the classic ESP32, the LL read/write names describe the peripheral
+    // data registers. They are opposite to the target-facing RX/TX directions.
+    hal->rx_lsbfirst = (slave_config->flags & SPI_SLAVE_TXBIT_LSBFIRST) ? 1 : 0;
+    hal->tx_lsbfirst = (slave_config->flags & SPI_SLAVE_RXBIT_LSBFIRST) ? 1 : 0;
+#else
     hal->rx_lsbfirst = (slave_config->flags & SPI_SLAVE_RXBIT_LSBFIRST) ? 1 : 0;
     hal->tx_lsbfirst = (slave_config->flags & SPI_SLAVE_TXBIT_LSBFIRST) ? 1 : 0;
+#endif
     hal->mode = slave_config->mode;
     hal->use_dma = spihost[host]->dma_enabled;
     spi_slave_hal_setup_device(hal);

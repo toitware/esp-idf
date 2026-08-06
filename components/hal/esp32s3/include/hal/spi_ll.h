@@ -608,8 +608,10 @@ static inline void spi_ll_slave_set_mode(spi_dev_t *hw, const int mode, bool dma
         hw->slave.clk_mode_13 = 1;
     } else if (mode == 2) {
         hw->misc.ck_idle_edge = 1;
-        hw->user.rsck_i_edge = 1;
-        hw->user.tsck_i_edge = 1;
+        // DMA needs the opposite internal edge to keep RX aligned with the
+        // non-DMA path and to advance each TX bit before the sampling edge.
+        hw->user.rsck_i_edge = dma_used ? 0 : 1;
+        hw->user.tsck_i_edge = dma_used ? 0 : 1;
         hw->slave.clk_mode_13 = 0;
     } else if (mode == 3) {
         hw->misc.ck_idle_edge = 1;
@@ -617,7 +619,9 @@ static inline void spi_ll_slave_set_mode(spi_dev_t *hw, const int mode, bool dma
         hw->user.tsck_i_edge = 0;
         hw->slave.clk_mode_13 = 1;
     }
-    hw->slave.rsck_data_out = 0;
+    // In non-DMA mode 2, outputting on RSCK makes the first bit valid before
+    // the controller's leading edge. DMA uses the edge selection above.
+    hw->slave.rsck_data_out = mode == 2 && !dma_used;
 }
 
 /**
