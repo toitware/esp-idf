@@ -409,7 +409,7 @@ static void s_i2c_start_end_command(i2c_master_bus_handle_t i2c_master, i2c_oper
 
         if (next_transaction.hw_cmd.op_code == I2C_LL_CMD_READ) {
 #if SOC_I2C_SUPPORT_10BIT_ADDR
-            if (i2c_master->addr_10bits_bus == I2C_ADDR_BIT_LEN_10) {
+            if (i2c_master->addr_10bits_bus == I2C_ADDR_BIT_LEN_10 && i2c_master->trans_idx == 0) {
                 i2c_ll_hw_cmd_t hw_write_cmd = {
                     .ack_en = false,
                     .op_code = I2C_LL_CMD_WRITE,
@@ -436,7 +436,7 @@ static void s_i2c_start_end_command(i2c_master_bus_handle_t i2c_master, i2c_oper
                 .byte_num = 1,
             };
             portENTER_CRITICAL_SAFE(&i2c_master->base->spinlock);
-            i2c_ll_write_txfifo(hal->dev, addr_read, sizeof(addr_read));
+            i2c_ll_write_txfifo(hal->dev, addr_read, 1);
             i2c_ll_master_write_cmd_reg(hal->dev, hw_write_cmd, i2c_master->cmd_idx);
             i2c_master->cmd_idx++;
             portEXIT_CRITICAL_SAFE(&i2c_master->base->spinlock);
