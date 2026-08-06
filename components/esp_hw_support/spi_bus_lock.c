@@ -748,6 +748,38 @@ IRAM_ATTR esp_err_t spi_bus_lock_acquire_start(spi_bus_lock_dev_t *dev_handle, T
     return ESP_OK;
 }
 
+IRAM_ATTR esp_err_t spi_bus_lock_try_acquire_start(spi_bus_lock_dev_t *dev_handle)
+{
+    spi_bus_lock_t* lock = dev_handle->parent;
+
+    // A failed acquire_core call deliberately leaves the LOCK bit set so a
+    // blocking caller can be resumed later. A try operation must instead test,
+    // set, and roll that bit back under the scheduling critical section.
+    portENTER_CRITICAL_SAFE(&s_spinlock);
+    uint32_t own_lock = dev_handle->mask & LOCK_MASK;
+    uint32_t status = lock_status_fetch_set(lock, own_lock);
+    bool acquired = (status & (BG_MASK | LOCK_MASK)) == 0;
+    if (acquired) {
+        lock->acquiring_dev = dev_handle;
+        BUS_LOCK_DEBUG_EXECUTE_CHECK(!lock->acq_dev_bg_active);
+    } else if ((status & own_lock) == 0) {
+        // This call introduced the bit. Don't clear a pre-existing request or
+        // acquisition made concurrently through the same device handle.
+        lock_status_fetch_clear(lock, own_lock);
+    }
+    portEXIT_CRITICAL_SAFE(&s_spinlock);
+
+    if (!acquired) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (status & WEAK_BG_FLAG) {
+        bg_disable(lock);
+    }
+
+    ESP_DRAM_LOGV(TAG, "dev %d acquired without waiting.", dev_lock_get_id(dev_handle));
+    return ESP_OK;
+}
+
 IRAM_ATTR esp_err_t spi_bus_lock_acquire_end(spi_bus_lock_dev_t *dev_handle)
 {
     //release the bus

@@ -338,6 +338,21 @@ esp_err_t spi_device_polling_transmit(spi_device_handle_t handle, spi_transactio
 esp_err_t spi_device_acquire_bus(spi_device_handle_t device, TickType_t wait);
 
 /**
+ * @brief Try to occupy the SPI bus for a device without waiting.
+ *
+ * On success this has the same effect as `spi_device_acquire_bus`. The caller
+ * must eventually call `spi_device_release_bus`.
+ *
+ * @param device The device requesting exclusive use of the bus.
+ *
+ * @return
+ *      - ESP_ERR_TIMEOUT : The bus is currently in use
+ *      - ESP_ERR_INVALID_STATE : A polling transaction is in progress
+ *      - ESP_OK : Success
+ */
+esp_err_t spi_device_try_acquire_bus(spi_device_handle_t device);
+
+/**
  * @brief Release the SPI bus occupied by the device. All other devices can start sending transactions.
  *
  * @param dev The device to release the bus.
