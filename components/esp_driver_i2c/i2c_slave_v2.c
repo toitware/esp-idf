@@ -62,22 +62,23 @@ IRAM_ATTR static bool i2c_slave_read_rx(i2c_slave_dev_t *i2c_slave, uint8_t *dat
     return xTaskWoken;
 }
 
-IRAM_ATTR static bool i2c_slave_handle_tx_fifo(i2c_slave_dev_t *i2c_slave)
+IRAM_ATTR static bool i2c_slave_handle_tx_fifo(i2c_slave_dev_t *i2c_slave, size_t *loaded)
 {
     BaseType_t xTaskWoken = pdFALSE;
     i2c_hal_context_t *hal = &i2c_slave->base->hal;
     uint8_t *data;
     uint32_t fifo_len = 0;
-    xSemaphoreTakeFromISR(i2c_slave->operation_mux, &xTaskWoken);
+    portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
     i2c_ll_get_txfifo_len(hal->dev, &fifo_len);
     size_t actual_get_len = 0;
     while (fifo_len > 0) {
         data = xRingbufferReceiveUpToFromISR(i2c_slave->tx_ring_buf, &actual_get_len, fifo_len);
         if (data) {
-            portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
             i2c_ll_write_txfifo(hal->dev, data, actual_get_len);
             fifo_len -= actual_get_len;
-            portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
+            if (loaded) {
+                *loaded += actual_get_len;
+            }
             vRingbufferReturnItemFromISR(i2c_slave->tx_ring_buf, data, &xTaskWoken);
         } else {
             // No data in ringbuffer, so disable the tx interrupt.
@@ -85,7 +86,7 @@ IRAM_ATTR static bool i2c_slave_handle_tx_fifo(i2c_slave_dev_t *i2c_slave)
             break;
         }
     }
-    xSemaphoreGiveFromISR(i2c_slave->operation_mux, &xTaskWoken);
+    portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
     return xTaskWoken;
 }
 
@@ -94,7 +95,6 @@ IRAM_ATTR static bool i2c_slave_handle_rx_fifo(i2c_slave_dev_t *i2c_slave, uint3
     i2c_hal_context_t *hal = &i2c_slave->base->hal;
     uint8_t data[SOC_I2C_FIFO_LEN];
     BaseType_t xTaskWoken = pdFALSE;
-    xSemaphoreTakeFromISR(i2c_slave->operation_mux, &xTaskWoken);
     if (len) {
         portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
         i2c_ll_read_rxfifo(hal->dev, data, len);
@@ -102,10 +102,31 @@ IRAM_ATTR static bool i2c_slave_handle_rx_fifo(i2c_slave_dev_t *i2c_slave, uint3
         BaseType_t res = xRingbufferSendFromISR(i2c_slave->rx_ring_buf, (void *)data, len, &xTaskWoken);
         if (res == pdTRUE) {
             i2c_slave->rx_data_count += len;
+        } else {
+            i2c_slave->receive_overflow = true;
         }
     }
-    xSemaphoreGiveFromISR(i2c_slave->operation_mux, &xTaskWoken);
     return xTaskWoken;
+}
+
+// The caller must hold the bus spinlock. Keeping the receive/return pair under
+// that lock prevents the ISR and task paths from having overlapping byte-buffer
+// receives, which the ringbuffer API does not support.
+static size_t i2c_slave_fill_tx_fifo(i2c_slave_dev_t *i2c_slave, size_t fifo_len)
+{
+    size_t loaded = 0;
+    while (fifo_len > 0) {
+        size_t actual_get_len = 0;
+        uint8_t *data = xRingbufferReceiveUpTo(i2c_slave->tx_ring_buf, &actual_get_len, 0, fifo_len);
+        if (!data) {
+            break;
+        }
+        i2c_ll_write_txfifo(i2c_slave->base->hal.dev, data, actual_get_len);
+        fifo_len -= actual_get_len;
+        loaded += actual_get_len;
+        vRingbufferReturnItem(i2c_slave->tx_ring_buf, data);
+    }
+    return loaded;
 }
 
 #if SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
@@ -116,28 +137,45 @@ IRAM_ATTR static bool i2c_slave_handle_stretch_event(i2c_slave_dev_t *i2c_slave,
     i2c_hal_context_t *hal = &i2c_slave->base->hal;
     i2c_ll_slave_get_stretch_cause(hal->dev, &cause);
     if (cause == I2C_SLAVE_STRETCH_CAUSE_ADDRESS_MATCH) {
+        portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
+        i2c_slave->request_pending = true;
+        portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
         if (rx_fifo_exist_len) {
             xTaskWoken |= i2c_slave_handle_rx_fifo(i2c_slave, rx_fifo_exist_len);
         }
-        if (i2c_slave->rx_data_count) {
+        if (i2c_slave->rx_data_count || i2c_slave->receive_overflow) {
             uint32_t len = i2c_slave->rx_data_count;
             size_t read_len;
             xTaskWoken |= i2c_slave_read_rx(i2c_slave, i2c_slave->receive_desc.buffer, len, &read_len);
             i2c_slave_rx_done_event_data_t edata = {};
             edata.buffer = i2c_slave->receive_desc.buffer;
             edata.length = read_len;
+            edata.overflow = i2c_slave->receive_overflow;
             if (i2c_slave->receive_callback) {
                 xTaskWoken |= i2c_slave->receive_callback(i2c_slave, &edata, i2c_slave->user_ctx);
             }
             i2c_slave->rx_data_count = 0;
+            i2c_slave->receive_overflow = false;
         }
         i2c_slave_request_event_data_t evt_data = {};
         if (i2c_slave->request_callback) {
             xTaskWoken |= i2c_slave->request_callback(i2c_slave, &evt_data, i2c_slave->user_ctx);
         }
-        //will clear after request callback
+        // Data may have been queued before the request. Move it into the FIFO
+        // and release the address-match stretch without requiring another
+        // i2c_slave_write call. If no data is available, keep stretching so the
+        // request callback can wake a task that produces the response.
+        size_t loaded = 0;
+        xTaskWoken |= i2c_slave_handle_tx_fifo(i2c_slave, &loaded);
+        if (loaded != 0) {
+            i2c_ll_slave_enable_tx_it(hal->dev);
+            portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
+            i2c_slave->request_pending = false;
+            portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
+            i2c_ll_slave_clear_stretch(hal->dev);
+        }
     } else if (cause == I2C_SLAVE_STRETCH_CAUSE_TX_EMPTY) {
-        xTaskWoken |= i2c_slave_handle_tx_fifo(i2c_slave);
+        xTaskWoken |= i2c_slave_handle_tx_fifo(i2c_slave, NULL);
         i2c_ll_slave_clear_stretch(hal->dev);
     } else if (cause == I2C_SLAVE_STRETCH_CAUSE_RX_FULL) {
         xTaskWoken |= i2c_slave_handle_rx_fifo(i2c_slave, rx_fifo_exist_len);
@@ -168,22 +206,24 @@ IRAM_ATTR static void i2c_slave_isr_handler(void *arg)
         if (rx_fifo_exist_len) {
             pxHigherPriorityTaskWoken |= i2c_slave_handle_rx_fifo(i2c_slave, rx_fifo_exist_len);
         }
-        if (i2c_slave->rx_data_count) {
+        if (i2c_slave->rx_data_count || i2c_slave->receive_overflow) {
             uint32_t len = i2c_slave->rx_data_count;
             size_t read_len;
             pxHigherPriorityTaskWoken |= i2c_slave_read_rx(i2c_slave, i2c_slave->receive_desc.buffer, len, &read_len);
             i2c_slave_rx_done_event_data_t edata = {};
             edata.buffer = i2c_slave->receive_desc.buffer;
             edata.length = read_len;
+            edata.overflow = i2c_slave->receive_overflow;
             if (i2c_slave->receive_callback) {
                 pxHigherPriorityTaskWoken |= i2c_slave->receive_callback(i2c_slave, &edata, i2c_slave->user_ctx);
             }
             i2c_slave->rx_data_count = 0;
+            i2c_slave->receive_overflow = false;
         }
         if (slave_rw == I2C_SLAVE_READ_BY_MASTER) {
 #if !SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
             i2c_slave_request_event_data_t evt_data = {};
-            if (i2c_slave->request_callback) {
+            if (i2c_slave->request_callback && i2c_ll_slave_wait_ack(hal->dev)) {
                 pxHigherPriorityTaskWoken |= i2c_slave->request_callback(i2c_slave, &evt_data, i2c_slave->user_ctx);
             }
 #endif
@@ -197,7 +237,7 @@ IRAM_ATTR static void i2c_slave_isr_handler(void *arg)
 #endif
 
     if (int_mask & I2C_INTR_SLV_TXFIFO_WM) {  // TX FiFo Empty
-        pxHigherPriorityTaskWoken |= i2c_slave_handle_tx_fifo(i2c_slave);
+        pxHigherPriorityTaskWoken |= i2c_slave_handle_tx_fifo(i2c_slave, NULL);
     }
 
     if (pxHigherPriorityTaskWoken) {
@@ -264,20 +304,18 @@ esp_err_t i2c_new_slave_device(const i2c_slave_config_t *slave_config, i2c_slave
     ESP_GOTO_ON_ERROR(i2c_common_set_pins(i2c_slave->base), err, TAG, "i2c slave set pins failed");
 
     i2c_slave->rx_ring_buf = xRingbufferCreateWithCaps(slave_config->receive_buf_depth, RINGBUF_TYPE_BYTEBUF, I2C_MEM_ALLOC_CAPS);
-    ESP_GOTO_ON_FALSE(i2c_slave->rx_ring_buf != NULL, ESP_ERR_INVALID_STATE, err, TAG, "ringbuffer create failed");
+    ESP_GOTO_ON_FALSE(i2c_slave->rx_ring_buf != NULL, ESP_ERR_NO_MEM, err, TAG, "ringbuffer create failed");
 
     i2c_slave->operation_mux = xSemaphoreCreateBinaryWithCaps(I2C_MEM_ALLOC_CAPS);
     ESP_GOTO_ON_FALSE(i2c_slave->operation_mux, ESP_ERR_NO_MEM, err, TAG, "No memory for binary semaphore");
     xSemaphoreGive(i2c_slave->operation_mux);
 
-    uint8_t *rcv_buffer = heap_caps_calloc(1, slave_config->receive_buf_depth, I2C_MEM_ALLOC_CAPS);
-    ESP_RETURN_ON_FALSE(rcv_buffer, ESP_ERR_NO_MEM, TAG, "no memory for i2c slave receive internal buffer");
-
-    i2c_slave->receive_desc.buffer = rcv_buffer;
+    i2c_slave->receive_desc.buffer = heap_caps_calloc(1, slave_config->receive_buf_depth, I2C_MEM_ALLOC_CAPS);
+    ESP_GOTO_ON_FALSE(i2c_slave->receive_desc.buffer, ESP_ERR_NO_MEM, err, TAG, "no memory for i2c slave receive internal buffer");
     i2c_slave->receive_desc.rcv_fifo_cnt = slave_config->receive_buf_depth;
 
     i2c_slave->tx_ring_buf = xRingbufferCreateWithCaps(slave_config->send_buf_depth, RINGBUF_TYPE_BYTEBUF, I2C_MEM_ALLOC_CAPS);
-    ESP_RETURN_ON_FALSE(i2c_slave->tx_ring_buf, ESP_ERR_NO_MEM, TAG, "no memory for i2c slave transmit ringbuffer");
+    ESP_GOTO_ON_FALSE(i2c_slave->tx_ring_buf, ESP_ERR_NO_MEM, err, TAG, "no memory for i2c slave transmit ringbuffer");
 
 #if I2C_USE_RETENTION_LINK
     if (slave_config->flags.allow_pd != 0) {
@@ -311,6 +349,13 @@ esp_err_t i2c_new_slave_device(const i2c_slave_config_t *slave_config, i2c_slave
     i2c_ll_set_txfifo_empty_thr(hal->dev, SOC_I2C_FIFO_LEN / 2);
     i2c_ll_set_rxfifo_full_thr(hal->dev, SOC_I2C_FIFO_LEN / 2);
     i2c_ll_set_sda_timing(hal->dev, 10, 10);
+
+#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32C3
+    // Match upstream ESP-IDF initialization for ESP32-S3 and ESP32-C3.
+    // Espressif identifies SLV_TX_AUTO_START_EN as a hardware workaround.
+    // See upstream commit 8b8b5df1414d.
+    i2c_ll_slave_enable_auto_start(hal->dev, true);
+#endif
 
     i2c_ll_disable_intr_mask(hal->dev, I2C_LL_INTR_MASK);
     i2c_ll_clear_intr_mask(hal->dev, I2C_LL_INTR_MASK);
@@ -352,12 +397,14 @@ esp_err_t i2c_slave_write(i2c_slave_dev_handle_t i2c_slave, const uint8_t *data,
     uint32_t free_fifo_len = 0;
     uint32_t write_ringbuffer_len = 0;
     uint32_t actual_write_fifo_size = 0;
-    uint8_t *existing_data = NULL;
-    size_t existing_size = 0;
     i2c_hal_context_t *hal = &i2c_slave->base->hal;
     TickType_t wait_ticks = (timeout_ms == -1) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
+    bool request_pending = true;
+    bool release_request = false;
 
-    xSemaphoreTake(i2c_slave->operation_mux, wait_ticks);
+    if (xSemaphoreTake(i2c_slave->operation_mux, wait_ticks) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
 
     portENTER_CRITICAL(&i2c_slave->base->spinlock);
 #if !SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
@@ -368,31 +415,31 @@ esp_err_t i2c_slave_write(i2c_slave_dev_handle_t i2c_slave, const uint8_t *data,
         // For the target (esp32) cannot stretch, reset the fifo when there is any dirty data in fifo.
         i2c_ll_txfifo_rst(hal->dev);
     }
+#else
+    request_pending = i2c_slave->request_pending;
 #endif
-    i2c_ll_get_txfifo_len(hal->dev, &free_fifo_len);
-    portEXIT_CRITICAL(&i2c_slave->base->spinlock);
-
-    // Check if there is any data in the ringbuffer in last transaction
-    existing_data = xRingbufferReceiveUpTo(i2c_slave->tx_ring_buf, &existing_size, 0, free_fifo_len);
-    if (existing_data) {
-        // has data, fill to the fifo
-        i2c_ll_write_txfifo(hal->dev, existing_data, existing_size);
-        free_fifo_len -= existing_size;
-        vRingbufferReturnItem(i2c_slave->tx_ring_buf, existing_data);
+    if (request_pending) {
+        i2c_ll_get_txfifo_len(hal->dev, &free_fifo_len);
     }
+
+    // Check if there is any data in the ringbuffer from the last transaction.
+    size_t existing_size = i2c_slave_fill_tx_fifo(i2c_slave, free_fifo_len);
+    free_fifo_len -= existing_size;
 
     // Write data.
     if (free_fifo_len) {
-        portENTER_CRITICAL(&i2c_slave->base->spinlock);
-        if (len < free_fifo_len) {
-            actual_write_fifo_size = len;
-        }
+        actual_write_fifo_size = len < free_fifo_len ? len : free_fifo_len;
         i2c_ll_write_txfifo(hal->dev, (uint8_t *)data, actual_write_fifo_size);
         data += actual_write_fifo_size;
         len -= actual_write_fifo_size;
-        portEXIT_CRITICAL(&i2c_slave->base->spinlock);
-        //write the rest of the bytes to the ringbuffer
     }
+    release_request = request_pending && (existing_size + actual_write_fifo_size) != 0;
+#if SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
+    if (release_request) {
+        i2c_slave->request_pending = false;
+    }
+#endif
+    portEXIT_CRITICAL(&i2c_slave->base->spinlock);
 
     if (len) {
         write_ringbuffer_len = xRingbufferGetCurFreeSize(i2c_slave->tx_ring_buf);
@@ -406,10 +453,30 @@ esp_err_t i2c_slave_write(i2c_slave_dev_handle_t i2c_slave, const uint8_t *data,
     }
 
     *write_len = write_ringbuffer_len + actual_write_fifo_size;
-    i2c_ll_slave_enable_tx_it(hal->dev);
-    i2c_ll_slave_clear_stretch(hal->dev);
+
+#if SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
+    // An address match can race with the ringbuffer send above. If the ISR saw
+    // the empty buffer, finish servicing the request here after the data has
+    // become visible. The ISR can always run while operation_mux is held.
+    if (!release_request && write_ringbuffer_len != 0) {
+        portENTER_CRITICAL(&i2c_slave->base->spinlock);
+        if (i2c_slave->request_pending) {
+            i2c_ll_get_txfifo_len(hal->dev, &free_fifo_len);
+            size_t loaded = i2c_slave_fill_tx_fifo(i2c_slave, free_fifo_len);
+            if (loaded != 0) {
+                i2c_slave->request_pending = false;
+                release_request = true;
+            }
+        }
+        portEXIT_CRITICAL(&i2c_slave->base->spinlock);
+    }
+#endif
 
     xSemaphoreGive(i2c_slave->operation_mux);
+    if (release_request) {
+        i2c_ll_slave_enable_tx_it(hal->dev);
+        i2c_ll_slave_clear_stretch(hal->dev);
+    }
 
     return ESP_OK;
 }
