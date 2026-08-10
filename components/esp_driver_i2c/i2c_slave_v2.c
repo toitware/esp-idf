@@ -68,8 +68,41 @@ IRAM_ATTR static bool i2c_slave_handle_tx_fifo(i2c_slave_dev_t *i2c_slave, size_
     i2c_hal_context_t *hal = &i2c_slave->base->hal;
     uint8_t *data;
     uint32_t fifo_len = 0;
+    i2c_slave_transmit_callback_t transmit_callback;
+    void *user_ctx;
     portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
     i2c_ll_get_txfifo_len(hal->dev, &fifo_len);
+    transmit_callback = i2c_slave->transmit_callback;
+    user_ctx = i2c_slave->user_ctx;
+    portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
+    while (transmit_callback && fifo_len > 0) {
+        i2c_slave_transmit_event_data_t edata = {
+            .buffer = NULL,
+            .buffer_size = fifo_len,
+            .length = 0,
+        };
+        xTaskWoken |= transmit_callback(i2c_slave, &edata, user_ctx);
+        size_t callback_length = edata.length < fifo_len ? edata.length : fifo_len;
+        if (edata.buffer == NULL || callback_length == 0) {
+            break;
+        }
+        portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
+        i2c_ll_write_txfifo(hal->dev, edata.buffer, callback_length);
+        i2c_slave->tx_data_count += callback_length;
+        fifo_len -= callback_length;
+        if (loaded) {
+            *loaded += callback_length;
+        }
+        portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
+    }
+
+    // Callback-backed and buffered writes are separate transmit modes. In
+    // callback mode there must not be any buffered data to mix into the FIFO.
+    if (transmit_callback) {
+        return xTaskWoken;
+    }
+
+    portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
     size_t actual_get_len = 0;
     while (fifo_len > 0) {
         data = xRingbufferReceiveUpToFromISR(i2c_slave->tx_ring_buf, &actual_get_len, fifo_len);
@@ -89,6 +122,41 @@ IRAM_ATTR static bool i2c_slave_handle_tx_fifo(i2c_slave_dev_t *i2c_slave, size_
     portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
     return xTaskWoken;
 }
+
+#if SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
+IRAM_ATTR static bool i2c_slave_handle_tx_done(i2c_slave_dev_t *i2c_slave)
+{
+    if (!i2c_slave->transmit_callback) {
+        return false;
+    }
+
+    BaseType_t xTaskWoken = pdFALSE;
+    i2c_hal_context_t *hal = &i2c_slave->base->hal;
+    uint32_t free_fifo_len = 0;
+    portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
+    i2c_ll_slave_disable_tx_it(hal->dev);
+    i2c_ll_get_txfifo_len(hal->dev, &free_fifo_len);
+    uint32_t remaining = SOC_I2C_FIFO_LEN - free_fifo_len;
+    uint32_t removed = i2c_slave->tx_data_count > remaining
+                       ? i2c_slave->tx_data_count - remaining
+                       : 0;
+    // The slave peripheral removes the next byte from the FIFO before it sees
+    // the controller's terminal NACK. That prefetched byte was not clocked as
+    // part of the completed transaction.
+    uint32_t transmitted = removed > 0 ? removed - 1 : 0;
+    i2c_slave->tx_data_count = 0;
+    i2c_ll_txfifo_rst(hal->dev);
+    portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
+
+    if (i2c_slave->transmit_done_callback) {
+        i2c_slave_transmit_done_event_data_t edata = {
+            .length = transmitted,
+        };
+        xTaskWoken |= i2c_slave->transmit_done_callback(i2c_slave, &edata, i2c_slave->user_ctx);
+    }
+    return xTaskWoken;
+}
+#endif
 
 IRAM_ATTR static bool i2c_slave_handle_rx_fifo(i2c_slave_dev_t *i2c_slave, uint32_t len)
 {
@@ -130,7 +198,7 @@ static size_t i2c_slave_fill_tx_fifo(i2c_slave_dev_t *i2c_slave, size_t fifo_len
 }
 
 #if SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
-IRAM_ATTR static bool i2c_slave_handle_stretch_event(i2c_slave_dev_t *i2c_slave, uint32_t rx_fifo_exist_len)
+IRAM_ATTR static bool i2c_slave_handle_stretch_event(i2c_slave_dev_t *i2c_slave, uint32_t rx_fifo_exist_len, i2c_slave_read_write_status_t slave_rw)
 {
     i2c_slave_stretch_cause_t cause;
     BaseType_t xTaskWoken = pdFALSE;
@@ -139,6 +207,7 @@ IRAM_ATTR static bool i2c_slave_handle_stretch_event(i2c_slave_dev_t *i2c_slave,
     if (cause == I2C_SLAVE_STRETCH_CAUSE_ADDRESS_MATCH) {
         portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
         i2c_slave->request_pending = true;
+        i2c_slave->transmit_active = slave_rw == I2C_SLAVE_READ_BY_MASTER;
         portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
         if (rx_fifo_exist_len) {
             xTaskWoken |= i2c_slave_handle_rx_fifo(i2c_slave, rx_fifo_exist_len);
@@ -197,12 +266,19 @@ IRAM_ATTR static void i2c_slave_isr_handler(void *arg)
     uint32_t rx_fifo_exist_len = 0;
     i2c_ll_get_rxfifo_cnt(hal->dev, &rx_fifo_exist_len);
     i2c_slave_read_write_status_t slave_rw = i2c_ll_slave_get_read_write_status(hal->dev);
+    bool transmit_done = false;
 
     if (int_mask & I2C_INTR_SLV_RXFIFO_WM) {
         pxHigherPriorityTaskWoken |= i2c_slave_handle_rx_fifo(i2c_slave, rx_fifo_exist_len);
     }
 
     if (int_mask & I2C_INTR_SLV_COMPLETE) {
+#if SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
+        if (slave_rw == I2C_SLAVE_READ_BY_MASTER) {
+            pxHigherPriorityTaskWoken |= i2c_slave_handle_tx_done(i2c_slave);
+            transmit_done = i2c_slave->transmit_callback != NULL;
+        }
+#endif
         if (rx_fifo_exist_len) {
             pxHigherPriorityTaskWoken |= i2c_slave_handle_rx_fifo(i2c_slave, rx_fifo_exist_len);
         }
@@ -228,15 +304,22 @@ IRAM_ATTR static void i2c_slave_isr_handler(void *arg)
             }
 #endif
         }
+#if SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
+        if (slave_rw == I2C_SLAVE_READ_BY_MASTER) {
+            portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
+            i2c_slave->transmit_active = false;
+            portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
+        }
+#endif
     }
 
 #if SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
     if (int_mask & I2C_INTR_STRETCH) {  // STRETCH
-        pxHigherPriorityTaskWoken |= i2c_slave_handle_stretch_event(i2c_slave, rx_fifo_exist_len);
+        pxHigherPriorityTaskWoken |= i2c_slave_handle_stretch_event(i2c_slave, rx_fifo_exist_len, slave_rw);
     }
 #endif
 
-    if (int_mask & I2C_INTR_SLV_TXFIFO_WM) {  // TX FiFo Empty
+    if ((int_mask & I2C_INTR_SLV_TXFIFO_WM) && !transmit_done) {  // TX FiFo Empty
         pxHigherPriorityTaskWoken |= i2c_slave_handle_tx_fifo(i2c_slave, NULL);
     }
 
@@ -407,6 +490,12 @@ esp_err_t i2c_slave_write(i2c_slave_dev_handle_t i2c_slave, const uint8_t *data,
     }
 
     portENTER_CRITICAL(&i2c_slave->base->spinlock);
+    if (i2c_slave->transmit_callback) {
+        portEXIT_CRITICAL(&i2c_slave->base->spinlock);
+        xSemaphoreGive(i2c_slave->operation_mux);
+        ESP_LOGE(TAG, "transmit callback is registered");
+        return ESP_ERR_INVALID_STATE;
+    }
 #if !SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
     i2c_ll_slave_disable_tx_it(hal->dev);
     uint32_t txfifo_len = 0;
@@ -485,20 +574,55 @@ esp_err_t i2c_slave_register_event_callbacks(i2c_slave_dev_handle_t i2c_slave, c
 {
     ESP_RETURN_ON_FALSE(i2c_slave != NULL, ESP_ERR_INVALID_ARG, TAG, "i2c slave handle not initialized");
     ESP_RETURN_ON_FALSE(cbs, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
+#if !SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
+    ESP_RETURN_ON_FALSE(!cbs->on_transmit && !cbs->on_transmit_done, ESP_ERR_NOT_SUPPORTED, TAG, "synchronous transmit callbacks are not supported");
+#endif
 #if CONFIG_I2C_ISR_IRAM_SAFE
     if (cbs->on_request) {
-        ESP_RETURN_ON_FALSE(esp_ptr_in_iram(cbs->on_request), ESP_ERR_INVALID_ARG, TAG, "i2c request occur callback not in IRAM");
+        ESP_RETURN_ON_FALSE(esp_ptr_in_iram(cbs->on_request) || esp_ptr_in_rtc_iram_fast(cbs->on_request), ESP_ERR_INVALID_ARG, TAG, "i2c request occur callback not in IRAM");
     }
     if (cbs->on_receive) {
-        ESP_RETURN_ON_FALSE(esp_ptr_in_iram(cbs->on_receive), ESP_ERR_INVALID_ARG, TAG, "i2c receive occur callback not in IRAM");
+        ESP_RETURN_ON_FALSE(esp_ptr_in_iram(cbs->on_receive) || esp_ptr_in_rtc_iram_fast(cbs->on_receive), ESP_ERR_INVALID_ARG, TAG, "i2c receive occur callback not in IRAM");
+    }
+    if (cbs->on_transmit) {
+        ESP_RETURN_ON_FALSE(esp_ptr_in_iram(cbs->on_transmit) || esp_ptr_in_rtc_iram_fast(cbs->on_transmit), ESP_ERR_INVALID_ARG, TAG, "i2c transmit callback not in IRAM");
+    }
+    if (cbs->on_transmit_done) {
+        ESP_RETURN_ON_FALSE(esp_ptr_in_iram(cbs->on_transmit_done) || esp_ptr_in_rtc_iram_fast(cbs->on_transmit_done), ESP_ERR_INVALID_ARG, TAG, "i2c transmit done callback not in IRAM");
     }
     if (user_data) {
         ESP_RETURN_ON_FALSE(esp_ptr_internal(user_data), ESP_ERR_INVALID_ARG, TAG, "user context not in internal RAM");
     }
 #endif
 
-    i2c_slave->user_ctx = user_data;
-    i2c_slave->request_callback = cbs->on_request;
-    i2c_slave->receive_callback = cbs->on_receive;
-    return ESP_OK;
+    // Keep callback-backed and buffered transmit data from sharing the FIFO.
+    // Take the writer mutex without waiting so this API remains non-blocking.
+    ESP_RETURN_ON_FALSE(xSemaphoreTake(i2c_slave->operation_mux, 0) == pdTRUE, ESP_ERR_TIMEOUT, TAG, "another operation is in progress");
+    esp_err_t ret = ESP_OK;
+    portENTER_CRITICAL(&i2c_slave->base->spinlock);
+    if (i2c_slave->transmit_active) {
+        ret = ESP_ERR_INVALID_STATE;
+    } else if (i2c_slave->transmit_callback != cbs->on_transmit) {
+        UBaseType_t buffered_bytes = 0;
+        uint32_t free_fifo_len = 0;
+        vRingbufferGetInfo(i2c_slave->tx_ring_buf, NULL, NULL, NULL, NULL, &buffered_bytes);
+        i2c_ll_get_txfifo_len(i2c_slave->base->hal.dev, &free_fifo_len);
+        if (i2c_slave->tx_data_count != 0 || buffered_bytes != 0 ||
+                free_fifo_len != SOC_I2C_FIFO_LEN) {
+            ret = ESP_ERR_INVALID_STATE;
+        }
+    }
+
+    if (ret == ESP_OK) {
+        i2c_slave->user_ctx = user_data;
+        i2c_slave->request_callback = cbs->on_request;
+        i2c_slave->receive_callback = cbs->on_receive;
+        i2c_slave->transmit_callback = cbs->on_transmit;
+        i2c_slave->transmit_done_callback = cbs->on_transmit_done;
+    }
+    portEXIT_CRITICAL(&i2c_slave->base->spinlock);
+    xSemaphoreGive(i2c_slave->operation_mux);
+
+    ESP_RETURN_ON_ERROR(ret, TAG, "cannot change transmit mode while data is pending");
+    return ret;
 }

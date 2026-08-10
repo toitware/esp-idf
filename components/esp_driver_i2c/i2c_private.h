@@ -215,13 +215,17 @@ struct i2c_slave_dev_t {
     SemaphoreHandle_t operation_mux;                  // Mux for i2c slave task writers
     i2c_slave_request_callback_t request_callback;    // i2c slave request callback
     i2c_slave_received_callback_t receive_callback;   // i2c_slave receive callback
+    i2c_slave_transmit_callback_t transmit_callback;  // synchronously provide transmit data from the ISR
+    i2c_slave_transmit_done_callback_t transmit_done_callback; // synchronously provided transmit data completed
     void *user_ctx;                                   // Callback user context
     RingbufHandle_t rx_ring_buf;                      // receive ringbuffer
     RingbufHandle_t tx_ring_buf;                      // transmit ringbuffer
     uint32_t rx_data_count;                           // receive data count
+    uint32_t tx_data_count;                           // callback-provided bytes loaded for the current transaction
     i2c_slave_receive_t receive_desc;                 // slave receive descriptor
     bool receive_overflow;                            // bytes were dropped in the current receive transaction
     bool request_pending;                             // target is stretching at a read address match
+    bool transmit_active;                             // controller is reading from the target
 };
 
 #endif // CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2
