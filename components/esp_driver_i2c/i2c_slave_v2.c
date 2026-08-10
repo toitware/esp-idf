@@ -339,9 +339,9 @@ esp_err_t i2c_new_slave_device(const i2c_slave_config_t *slave_config, i2c_slave
     i2c_ll_set_sda_timing(hal->dev, 10, 10);
 
 #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32C3
-    // Workaround for hardware bug in ESP32S3 and ESP32C3.
-    // Please note that following code has no functionality.
-    // It's just use for workaround the potential issue.
+    // Match upstream ESP-IDF initialization for ESP32-S3 and ESP32-C3.
+    // Espressif identifies SLV_TX_AUTO_START_EN as a hardware workaround.
+    // See upstream commit 8b8b5df1414d.
     i2c_ll_slave_enable_auto_start(hal->dev, true);
 #endif
 
