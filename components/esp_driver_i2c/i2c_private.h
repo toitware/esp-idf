@@ -212,7 +212,7 @@ struct i2c_slave_dev_t {
 
 struct i2c_slave_dev_t {
     i2c_bus_t *base;                                  // bus base class
-    SemaphoreHandle_t operation_mux;                  // Mux for i2c slave operation
+    SemaphoreHandle_t operation_mux;                  // Mux for i2c slave task writers
     i2c_slave_request_callback_t request_callback;    // i2c slave request callback
     i2c_slave_received_callback_t receive_callback;   // i2c_slave receive callback
     void *user_ctx;                                   // Callback user context
