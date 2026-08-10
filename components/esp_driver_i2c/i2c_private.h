@@ -225,6 +225,7 @@ struct i2c_slave_dev_t {
     i2c_slave_receive_t receive_desc;                 // slave receive descriptor
     bool receive_overflow;                            // bytes were dropped in the current receive transaction
     bool request_pending;                             // target is stretching at a read address match
+    bool transmit_active;                             // controller is reading from the target
 };
 
 #endif // CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2

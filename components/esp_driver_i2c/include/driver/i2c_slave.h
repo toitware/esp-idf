@@ -213,6 +213,8 @@ esp_err_t i2c_new_slave_device(const i2c_slave_config_t *slave_config, i2c_slave
  * @return
  *      - ESP_OK: Set I2C transaction callbacks successfully
  *      - ESP_ERR_INVALID_ARG: Set I2C transaction callbacks failed because of invalid argument
+ *      - ESP_ERR_INVALID_STATE: Transmit mode cannot be changed while a transaction or buffered data is pending
+ *      - ESP_ERR_TIMEOUT: Another operation is in progress
  *      - ESP_FAIL: Set I2C transaction callbacks failed because of other error
  */
 esp_err_t i2c_slave_register_event_callbacks(i2c_slave_dev_handle_t i2c_slave, const i2c_slave_event_callbacks_t *cbs, void *user_data);
