@@ -282,7 +282,8 @@ esp_err_t i2c_master_execute_defined_operations(i2c_master_dev_handle_t i2c_dev,
  * @note User can deregister a previously registered callback by calling this function and setting the callback member in the `cbs` structure to NULL.
  * @note When CONFIG_I2C_ISR_IRAM_SAFE is enabled, the callback itself and functions called by it should be placed in IRAM.
  *       The variables used in the function should be in the SRAM as well. The `user_data` should also reside in SRAM.
- * @note If the callback is used for helping asynchronous transaction. On the same bus, only one device can be used for performing asynchronous operation.
+ * @note When callbacks are used for asynchronous transactions, multiple devices may share the same bus. Transactions are
+ *       serialized by the bus queue, and each completion callback is invoked for the device that submitted the transaction.
  *
  * @param[in] i2c_dev I2C master device handle that created by `i2c_master_bus_add_device`.
  * @param[in] cbs Group of callback functions

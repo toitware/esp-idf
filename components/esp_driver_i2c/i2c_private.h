@@ -94,9 +94,15 @@ typedef struct {
 } i2c_operation_t;
 
 typedef struct {
+    i2c_master_dev_t *device; // Device used for this transaction
     uint32_t device_address; // Address of I2C device
+    uint32_t scl_speed_hz; // SCL clock frequency for this transaction
+    uint32_t scl_wait_us; // SCL stretch timeout for this transaction
     i2c_operation_t *ops; // Pointer to I2C operation structure
     size_t cmd_count; // Record how many I2C hardware commands in one transaction
+    i2c_addr_bit_len_t addr_10bits; // Whether the device address is 10 bits
+    bool ack_check_disable; // Whether ACK checking is disabled for this transaction
+    bool is_probe; // Whether this is a synchronous probe on an asynchronous bus
 } i2c_transaction_t;
 
 struct i2c_bus_t {
@@ -143,6 +149,7 @@ struct i2c_master_bus_t {
     uint32_t w_r_size;                                               // The size send/receive last time.
     bool trans_over_buffer;                                          // Data length is more than hardware fifo length, needs interrupt.
     bool async_trans;                                                // asynchronous transaction, true after callback is installed.
+    i2c_master_event_t async_error_event;                            // error retained until the asynchronous transaction is terminal
     bool ack_check_disable;                                          // Disable ACK check
     volatile bool trans_done;                                        // transaction command finish
     bool bypass_nack_log;                                             // Bypass the error log. Sometimes the error is expected.

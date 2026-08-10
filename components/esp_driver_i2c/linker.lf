@@ -6,9 +6,19 @@ entries:
         i2c_master: s_i2c_write_command (noflash)
         i2c_master: s_i2c_read_command (noflash)
         i2c_master: s_i2c_start_end_command (noflash)
+        i2c_master: s_i2c_hw_fsm_reset_from_isr (noflash)
+        i2c_master: s_i2c_load_transaction (noflash)
+        i2c_master: s_i2c_apply_transaction_config (noflash)
+        i2c_master: s_i2c_current_transaction_is_async (noflash)
+        i2c_master: i2c_ll_master_set_fractional_divider (noflash)
+        i2c_master: i2c_ll_master_get_filter (noflash)
+        i2c_master: i2c_ll_reset_register (noflash)
+        i2c_master: i2c_ll_set_source_clk (noflash)
+        i2c_master: i2c_ll_enable_fifo_mode (noflash)
+        i2c_master: i2c_ll_master_set_filter (noflash)
 
 [mapping:i2c_hal]
 archive: libhal.a
 entries:
     if I2C_ISR_IRAM_SAFE = y:
-        i2c_hal: i2c_hal_master_trans_start (noflash)
+        i2c_hal (noflash)
