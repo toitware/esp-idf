@@ -683,6 +683,11 @@ static esp_err_t s_i2c_transaction_start(i2c_master_dev_handle_t i2c_dev, int xf
         ESP_RETURN_ON_ERROR(esp_pm_lock_acquire(i2c_master->base->pm_lock), TAG, "acquire pm_lock failed");
     }
 
+    bool asynchronous = s_i2c_current_transaction_is_async(i2c_master);
+    if (asynchronous) {
+        portENTER_CRITICAL(&i2c_master->transaction_lock);
+        i2c_master->transaction_active = true;
+    }
     portENTER_CRITICAL(&i2c_master->base->spinlock);
     atomic_init(&i2c_master->trans_idx, 0);
     atomic_store(&i2c_master->status, I2C_STATUS_IDLE);
@@ -703,8 +708,9 @@ static esp_err_t s_i2c_transaction_start(i2c_master_dev_handle_t i2c_dev, int xf
     i2c_ll_clear_intr_mask(hal->dev, I2C_LL_MASTER_EVENT_INTR);
     i2c_ll_enable_intr_mask(hal->dev, I2C_LL_MASTER_EVENT_INTR);
     portEXIT_CRITICAL(&i2c_master->base->spinlock);
-    if (i2c_master->async_trans == true) {
+    if (asynchronous) {
         s_i2c_send_command_async(i2c_master, NULL);
+        portEXIT_CRITICAL(&i2c_master->transaction_lock);
     } else {
         s_i2c_send_commands(i2c_master, ticks_to_wait);
         // Wait event bits
@@ -770,11 +776,15 @@ static void IRAM_ATTR i2c_master_isr_handler_default(void *arg)
     portBASE_TYPE HPTaskAwoken = pdFALSE;
     uint32_t int_mask;
     BaseType_t ret = pdTRUE;
+    portENTER_CRITICAL_ISR(&i2c_master->transaction_lock);
     i2c_master->trans_done = false;
     i2c_ll_get_intr_mask(hal->dev, &int_mask);
     i2c_ll_clear_intr_mask(hal->dev, int_mask);
     if (int_mask == 0) {
-        return;
+        goto isr_exit;
+    }
+    if (s_i2c_current_transaction_is_async(i2c_master) && !i2c_master->transaction_active) {
+        goto isr_exit;
     }
 
     if (int_mask & I2C_LL_INTR_NACK) {
@@ -815,7 +825,10 @@ static void IRAM_ATTR i2c_master_isr_handler_default(void *arg)
         // A hardware timeout is already terminal and need not wait for STOP.
         bool transaction_finished = (i2c_master->trans_done && i2c_master->sent_all) ||
                                     interrupt_event == I2C_EVENT_TIMEOUT;
-        if (transaction_finished) {
+        if (transaction_finished && i2c_master->transaction_active) {
+            // Claim completion before calling application code. Further
+            // interrupts for this transaction are stale and are ignored.
+            i2c_master->transaction_active = false;
             i2c_master_event_data_t evt = {
                 .event = i2c_master->async_error_event == I2C_EVENT_ALIVE
                     ? I2C_EVENT_DONE
@@ -856,6 +869,7 @@ static void IRAM_ATTR i2c_master_isr_handler_default(void *arg)
                     i2c_master->contains_read = false;
                     i2c_master->async_error_event = I2C_EVENT_ALIVE;
                     s_i2c_load_transaction(i2c_master, &t);
+                    i2c_master->transaction_active = true;
                     s_i2c_apply_transaction_config(i2c_master);
                     i2c_ll_txfifo_rst(hal->dev);
                     i2c_ll_rxfifo_rst(hal->dev);
@@ -871,6 +885,7 @@ static void IRAM_ATTR i2c_master_isr_handler_default(void *arg)
     }
 
 isr_exit:
+    portEXIT_CRITICAL_ISR(&i2c_master->transaction_lock);
     if (HPTaskAwoken == pdTRUE) {
         portYIELD_FROM_ISR();
     }
@@ -1087,6 +1102,7 @@ esp_err_t i2c_new_master_bus(const i2c_master_bus_config_t *bus_config, i2c_mast
     i2c_master = heap_caps_calloc(1, sizeof(i2c_master_bus_t) + 20 * sizeof(i2c_transaction_t), I2C_MEM_ALLOC_CAPS);
 
     ESP_RETURN_ON_FALSE(i2c_master, ESP_ERR_NO_MEM, TAG, "no memory for i2c master bus");
+    i2c_master->transaction_lock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
 
     ESP_GOTO_ON_ERROR(i2c_acquire_bus_handle(i2c_port_num, &i2c_master->base, I2C_BUS_MODE_MASTER), err, TAG, "I2C bus acquire failed");
     i2c_port_num = i2c_master->base->port_num;
@@ -1278,6 +1294,52 @@ esp_err_t i2c_master_bus_reset(i2c_master_bus_handle_t bus_handle)
     // Reset I2C status state
     atomic_store(&bus_handle->status, I2C_STATUS_IDLE);
     return ESP_OK;
+}
+
+esp_err_t i2c_master_bus_abort_transaction(i2c_master_bus_handle_t bus_handle)
+{
+    ESP_RETURN_ON_FALSE(bus_handle != NULL, ESP_ERR_INVALID_ARG, TAG, "I2C bus is not initialized");
+    ESP_RETURN_ON_FALSE(bus_handle->async_trans, ESP_ERR_INVALID_STATE, TAG, "I2C bus is not asynchronous");
+
+    bool aborted = false;
+    bool queued = false;
+    portENTER_CRITICAL(&bus_handle->transaction_lock);
+    queued = bus_handle->queue_trans || bus_handle->num_trans_inqueue != 0;
+    if (!queued && bus_handle->transaction_active) {
+        i2c_hal_context_t *hal = &bus_handle->base->hal;
+        portENTER_CRITICAL(&bus_handle->base->spinlock);
+        i2c_ll_disable_intr_mask(hal->dev, I2C_LL_MASTER_EVENT_INTR);
+        i2c_ll_clear_intr_mask(hal->dev, I2C_LL_MASTER_EVENT_INTR);
+        portEXIT_CRITICAL(&bus_handle->base->spinlock);
+
+        bus_handle->transaction_active = false;
+        bus_handle->i2c_trans = (i2c_transaction_t) {};
+        bus_handle->cmd_idx = 0;
+        atomic_store(&bus_handle->trans_idx, 0);
+        bus_handle->rx_cnt = 0;
+        bus_handle->read_len_static = 0;
+        bus_handle->read_buf_pos = 0;
+        bus_handle->contains_read = false;
+        bus_handle->trans_done = false;
+        bus_handle->sent_all = true;
+        bus_handle->trans_finish = true;
+        bus_handle->in_progress = false;
+        bus_handle->new_queue = true;
+        bus_handle->event = I2C_EVENT_ALIVE;
+        bus_handle->async_error_event = I2C_EVENT_ALIVE;
+        aborted = true;
+    }
+    portEXIT_CRITICAL(&bus_handle->transaction_lock);
+
+    ESP_RETURN_ON_FALSE(!queued, ESP_ERR_INVALID_STATE, TAG, "cannot abort a bus with queued transactions");
+    ESP_RETURN_ON_FALSE(aborted, ESP_ERR_INVALID_STATE, TAG, "no active transaction");
+
+    // The interrupt handler can no longer access the retired transaction.
+    // Clear the physical bus outside the critical section because a target
+    // can hold a line low until the bounded bus-clear timeout expires.
+    esp_err_t ret = s_i2c_hw_fsm_reset(bus_handle, true);
+    atomic_store(&bus_handle->status, I2C_STATUS_IDLE);
+    return ret;
 }
 
 esp_err_t i2c_master_get_bus_handle(i2c_port_num_t port_num, i2c_master_bus_handle_t *ret_handle)

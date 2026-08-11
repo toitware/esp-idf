@@ -307,6 +307,25 @@ esp_err_t i2c_master_register_event_callbacks(i2c_master_dev_handle_t i2c_dev, c
 esp_err_t i2c_master_bus_reset(i2c_master_bus_handle_t bus_handle);
 
 /**
+ * @brief Abort the active asynchronous transaction on an I2C master bus.
+ *
+ * This function synchronizes with the I2C interrupt handler before returning.
+ * After it returns, the driver no longer accesses the aborted transaction's
+ * operation descriptors or data buffers. The bus must not have queued
+ * transactions.
+ *
+ * @param[in] bus_handle I2C bus handle.
+ * @return
+ *      - ESP_OK: The transaction was aborted and the bus was cleared.
+ *      - ESP_ERR_INVALID_ARG: The bus handle is invalid.
+ *      - ESP_ERR_INVALID_STATE: The bus is not asynchronous, has no active
+ *        transaction, or has queued transactions.
+ *      - Otherwise: The transaction was retired safely, but clearing the
+ *        physical bus failed.
+ */
+esp_err_t i2c_master_bus_abort_transaction(i2c_master_bus_handle_t bus_handle);
+
+/**
  * @brief Wait for all pending I2C transactions done
  *
  * @param[in] bus_handle I2C bus handle
