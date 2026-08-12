@@ -133,6 +133,7 @@ typedef struct i2c_master_device_list {
 
 struct i2c_master_bus_t {
     i2c_bus_t *base;                                                 // bus base class
+    portMUX_TYPE transaction_lock;                                   // Serializes abort with ISR transaction access
     SemaphoreHandle_t bus_lock_mux;                                  // semaphore to lock bus process
     int cmd_idx;                                                     //record current command index, for master mode
     _Atomic i2c_master_status_t status;                              // record current command status, for master mode
@@ -149,6 +150,8 @@ struct i2c_master_bus_t {
     uint32_t w_r_size;                                               // The size send/receive last time.
     bool trans_over_buffer;                                          // Data length is more than hardware fifo length, needs interrupt.
     bool async_trans;                                                // asynchronous transaction, true after callback is installed.
+    bool transaction_active;                                         // protected by transaction_lock
+    _Atomic bool abort_requested;                                    // asks the ISR to yield ownership to abort
     i2c_master_event_t async_error_event;                            // error retained until the asynchronous transaction is terminal
     bool ack_check_disable;                                          // Disable ACK check
     volatile bool trans_done;                                        // transaction command finish
