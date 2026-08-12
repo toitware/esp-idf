@@ -151,6 +151,7 @@ struct i2c_master_bus_t {
     bool trans_over_buffer;                                          // Data length is more than hardware fifo length, needs interrupt.
     bool async_trans;                                                // asynchronous transaction, true after callback is installed.
     bool transaction_active;                                         // protected by transaction_lock
+    _Atomic bool abort_requested;                                    // asks the ISR to yield ownership to abort
     i2c_master_event_t async_error_event;                            // error retained until the asynchronous transaction is terminal
     bool ack_check_disable;                                          // Disable ACK check
     volatile bool trans_done;                                        // transaction command finish
