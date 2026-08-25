@@ -120,6 +120,8 @@ typedef uintptr_t vaddr_t;
 #define dprintf(...) fprintf(__VA_ARGS__)
 #define INFO stdout
 
+static int first_allocations = true;
+
 #ifdef __XTENSA__
 IRAM_ATTR inline static bool in_interrupt_service_routine()
 {
@@ -136,15 +138,13 @@ IRAM_ATTR inline static bool in_interrupt_service_routine()
     return result;
 }
 
-static int first_allocations = true;
-
 // First allocation is too early in the boot process to get a thread local data, so we skip that.
 #define GET_THREAD_LOCAL_TAG ((in_interrupt_service_routine() || first_allocations) ? NULL : pvTaskGetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX))
 #elif defined(ESP_PLATFORM)
-// TODO: Find out whether non-xtensa ESP-IDF platforms call malloc from within
-// interrupts.  This has been deprecated for years, but may still be in the
-// code base.  For now, don't tag allocations.
-#define GET_THREAD_LOCAL_TAG NULL
+// Malloc from interrupts is deprecated, but keep the allocator robust if an
+// IDF component still does it. RISC-V ports provide the same ISR-context
+// query as Xtensa, so normal task allocations can retain their owner tag.
+#define GET_THREAD_LOCAL_TAG ((xPortInIsrContext() || first_allocations) ? NULL : pvTaskGetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX))
 #else
 #define GET_THREAD_LOCAL_TAG (pvTaskGetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX))
 #endif
@@ -1830,9 +1830,7 @@ void cmpct_set_option(cmpct_heap_t *heap, int option, void *value)
 {
     if (option == MALLOC_OPTION_THREAD_TAG) {
 #if !defined(TEST_CMPCTMALLOC) && !defined(CMPCTMALLOC_ON_LINUX)
-#if __XTENSA__
         first_allocations = false;
-#endif
         assert(MULTI_HEAP_THREAD_TAG_INDEX < configNUM_THREAD_LOCAL_STORAGE_POINTERS);
         vTaskSetThreadLocalStoragePointer(NULL, MULTI_HEAP_THREAD_TAG_INDEX, value);
 #else
