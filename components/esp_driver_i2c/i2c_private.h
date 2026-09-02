@@ -153,6 +153,7 @@ struct i2c_master_bus_t {
     bool transaction_active;                                         // protected by transaction_lock
     _Atomic bool abort_requested;                                    // asks the ISR to yield ownership to abort
     i2c_master_event_t async_error_event;                            // error retained until the asynchronous transaction is terminal
+    bool async_stopping_after_nack;                                  // standalone STOP is active after an asynchronous NACK
     bool ack_check_disable;                                          // Disable ACK check
     volatile bool trans_done;                                        // transaction command finish
     bool bypass_nack_log;                                             // Bypass the error log. Sometimes the error is expected.
