@@ -963,9 +963,6 @@ static esp_err_t i2c_master_bus_destroy(i2c_master_bus_handle_t bus_handle)
             if (i2c_master->event_queue) {
                 vQueueDeleteWithCaps(i2c_master->event_queue);
             }
-            if (i2c_master->queues_storage) {
-                free(i2c_master->queues_storage);
-            }
             free(i2c_master->i2c_async_ops);
             for (int i = 0; i < I2C_TRANS_QUEUE_MAX; i++) {
                 if (i2c_master->trans_queues[i]) {
@@ -1189,7 +1186,7 @@ esp_err_t i2c_new_master_bus(const i2c_master_bus_config_t *bus_config, i2c_mast
     portEXIT_CRITICAL(&i2c_master->base->spinlock);
 
     if (bus_config->intr_priority) {
-        ESP_RETURN_ON_FALSE(1 << (bus_config->intr_priority) & I2C_ALLOW_INTR_PRIORITY_MASK, ESP_ERR_INVALID_ARG, TAG, "invalid interrupt priority:%d", bus_config->intr_priority);
+        ESP_GOTO_ON_FALSE(1 << (bus_config->intr_priority) & I2C_ALLOW_INTR_PRIORITY_MASK, ESP_ERR_INVALID_ARG, err, TAG, "invalid interrupt priority:%d", bus_config->intr_priority);
     }
 
 #if I2C_USE_RETENTION_LINK
@@ -1208,25 +1205,19 @@ esp_err_t i2c_new_master_bus(const i2c_master_bus_config_t *bus_config, i2c_mast
         i2c_master->trans_finish = true;
         i2c_master->new_queue = true;
         i2c_master->queue_size = bus_config->trans_queue_depth;
-        i2c_master->queues_storage = (uint8_t*)heap_caps_calloc(bus_config->trans_queue_depth * I2C_TRANS_QUEUE_MAX, sizeof(i2c_transaction_t), I2C_MEM_ALLOC_CAPS);
-        ESP_RETURN_ON_FALSE(i2c_master->queues_storage, ESP_ERR_NO_MEM, TAG, "no mem for queue storage");
-        i2c_transaction_t **pp_trans_desc = (i2c_transaction_t **)i2c_master->queues_storage;
         for (int i = 0; i < I2C_TRANS_QUEUE_MAX; i++) {
             i2c_master->trans_queues[i] = xQueueCreate(bus_config->trans_queue_depth, sizeof(i2c_transaction_t));
-
-            pp_trans_desc += bus_config->trans_queue_depth;
-            // sanity check
-            assert(i2c_master->trans_queues[i]);
+            ESP_GOTO_ON_FALSE(i2c_master->trans_queues[i], ESP_ERR_NO_MEM, err, TAG, "no mem for transaction queue");
         }
         i2c_transaction_t trans_pre = {};
         for (int i = 0; i < bus_config->trans_queue_depth ; i++) {
             trans_pre = i2c_master->i2c_trans_pool[i];
-            ESP_RETURN_ON_FALSE(xQueueSend(i2c_master->trans_queues[I2C_TRANS_QUEUE_READY], &trans_pre, 0) == pdTRUE,
-                                ESP_ERR_INVALID_STATE, TAG, "ready queue full");
+            ESP_GOTO_ON_FALSE(xQueueSend(i2c_master->trans_queues[I2C_TRANS_QUEUE_READY], &trans_pre, 0) == pdTRUE,
+                              ESP_ERR_INVALID_STATE, err, TAG, "ready queue full");
         }
 
         i2c_master->i2c_async_ops = (i2c_operation_t(*)[I2C_STATIC_OPERATION_ARRAY_MAX])heap_caps_calloc(bus_config->trans_queue_depth, sizeof(*i2c_master->i2c_async_ops), I2C_MEM_ALLOC_CAPS);
-        ESP_RETURN_ON_FALSE(i2c_master->i2c_async_ops, ESP_ERR_NO_MEM, TAG, "no mem for operations");
+        ESP_GOTO_ON_FALSE(i2c_master->i2c_async_ops, ESP_ERR_NO_MEM, err, TAG, "no mem for operations");
         i2c_master->ops_prepare_idx = 0;
 
     }
