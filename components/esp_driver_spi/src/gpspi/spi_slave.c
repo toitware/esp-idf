@@ -297,6 +297,21 @@ esp_err_t spi_slave_free(spi_host_device_t host)
 {
     SPI_CHECK(is_valid_host(host), "invalid host", ESP_ERR_INVALID_ARG);
     SPI_CHECK(spihost[host], "host not slave", ESP_ERR_INVALID_ARG);
+    spi_slave_t *slave = spihost[host];
+    portENTER_CRITICAL(&slave->transaction_lock);
+    bool transaction_pending = slave->cur_trans.trans != NULL ||
+                               slave->abort_trans_desc != NULL ||
+                               (slave->trans_queue && uxQueueMessagesWaiting(slave->trans_queue) != 0);
+    if (transaction_pending) {
+        portEXIT_CRITICAL(&slave->transaction_lock);
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (slave->intr) {
+        // Keep the ISR from mounting a transaction while the driver-owned
+        // queues and state are being released.
+        esp_intr_disable(slave->intr);
+    }
+    portEXIT_CRITICAL(&slave->transaction_lock);
     if (spihost[host]->trans_queue) {
         vQueueDelete(spihost[host]->trans_queue);
     }
@@ -339,6 +354,21 @@ static void SPI_SLAVE_ISR_ATTR spi_slave_uninstall_priv_trans(spi_host_device_t 
 #endif  //SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
 }
 
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+static void SPI_SLAVE_ISR_ATTR spi_slave_free_setup_buffers(spi_slave_trans_priv_t *priv_trans)
+{
+    spi_slave_transaction_t *trans = (spi_slave_transaction_t *)priv_trans->trans;
+    if (priv_trans->tx_buffer != trans->tx_buffer) {
+        free(priv_trans->tx_buffer);
+        priv_trans->tx_buffer = (void *)trans->tx_buffer;
+    }
+    if (priv_trans->rx_buffer != trans->rx_buffer) {
+        free(priv_trans->rx_buffer);
+        priv_trans->rx_buffer = trans->rx_buffer;
+    }
+}
+#endif
+
 static esp_err_t SPI_SLAVE_ISR_ATTR spi_slave_setup_priv_trans(spi_host_device_t host, spi_slave_trans_priv_t *priv_trans)
 {
     spi_slave_transaction_t *trans = (spi_slave_transaction_t *)priv_trans->trans;
@@ -365,22 +395,34 @@ static esp_err_t SPI_SLAVE_ISR_ATTR spi_slave_setup_priv_trans(spi_host_device_t
             priv_trans->tx_buffer = temp;
         }
         esp_err_t ret = esp_cache_msync((void *)priv_trans->tx_buffer, buffer_byte_len, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-        ESP_RETURN_ON_FALSE_ISR(ESP_OK == ret, ESP_ERR_INVALID_STATE, SPI_TAG, "mem sync c2m(writeback) fail");
+        if (ret != ESP_OK) {
+            spi_slave_free_setup_buffers(priv_trans);
+            ESP_EARLY_LOGE(SPI_TAG, "mem sync c2m(writeback) fail");
+            return ESP_ERR_INVALID_STATE;
+        }
     }
     if (spihost[host]->dma_enabled && trans->rx_buffer) {
         if ((!esp_ptr_dma_capable(trans->rx_buffer) || ((((uint32_t)trans->rx_buffer) | (trans->length + 7) / 8) & (alignment - 1)))) {
-            ESP_RETURN_ON_FALSE_ISR(trans->flags & SPI_SLAVE_TRANS_DMA_BUFFER_ALIGN_AUTO, ESP_ERR_INVALID_ARG, SPI_TAG, "RX buffer addr&len not align to %d byte, or not dma_capable", alignment);
+            if (!(trans->flags & SPI_SLAVE_TRANS_DMA_BUFFER_ALIGN_AUTO)) {
+                spi_slave_free_setup_buffers(priv_trans);
+                ESP_EARLY_LOGE(SPI_TAG, "RX buffer addr&len not align to %d byte, or not dma_capable", alignment);
+                return ESP_ERR_INVALID_ARG;
+            }
             //if rxbuf in the desc not DMA-capable, or not align to "alignment", malloc a new one
             ESP_EARLY_LOGD(SPI_TAG, "Allocate RX buffer for DMA");
             buffer_byte_len = (buffer_byte_len + alignment - 1) & (~(alignment - 1));   // up align to "alignment"
             priv_trans->rx_buffer = heap_caps_aligned_alloc(alignment, buffer_byte_len, MALLOC_CAP_DMA);
             if (priv_trans->rx_buffer == NULL) {
-                free(priv_trans->tx_buffer);
+                spi_slave_free_setup_buffers(priv_trans);
                 return ESP_ERR_NO_MEM;
             }
         }
         esp_err_t ret = esp_cache_msync((void *)priv_trans->rx_buffer, buffer_byte_len, ESP_CACHE_MSYNC_FLAG_DIR_M2C);
-        ESP_RETURN_ON_FALSE_ISR(ESP_OK == ret, ESP_ERR_INVALID_STATE, SPI_TAG, "mem sync m2c(invalid) fail");
+        if (ret != ESP_OK) {
+            spi_slave_free_setup_buffers(priv_trans);
+            ESP_EARLY_LOGE(SPI_TAG, "mem sync m2c(invalid) fail");
+            return ESP_ERR_INVALID_STATE;
+        }
     }
 #endif  //SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
     return ESP_OK;
@@ -469,13 +511,11 @@ esp_err_t SPI_SLAVE_ATTR spi_slave_abort_transaction(spi_host_device_t host, con
     // may already be completing the transaction on the other core.
     esp_err_t ret = ESP_OK;
     portENTER_CRITICAL(&slave->transaction_lock);
-    freeze_cs(slave);
-    esp_intr_disable(slave->intr);
     if (slave->cur_trans.trans != trans_desc) {
-        restore_cs(slave);
-        esp_intr_enable(slave->intr);
         ret = ESP_ERR_INVALID_STATE;
     } else {
+        freeze_cs(slave);
+        esp_intr_disable(slave->intr);
         // The ISR retires the descriptor and reports completion only after the
         // peripheral and any DMA channel have been reset.
         slave->abort_trans_desc = trans_desc;
