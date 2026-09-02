@@ -116,6 +116,12 @@ static void SPI_SLAVE_ISR_ATTR freeze_cs(spi_slave_t *host)
 // This is used in test by internal gpio matrix connections
 static inline void SPI_SLAVE_ISR_ATTR restore_cs(spi_slave_t *host)
 {
+    // A negative CS pin is supported for non-DMA targets whose selection is
+    // handled outside the driver. In that configuration there is no GPIO
+    // route to restore.
+    if (host->cfg.spics_io_num < 0) {
+        return;
+    }
     if (host->cs_iomux) {
         gpio_ll_iomux_in(GPIO_HAL_GET_HW(GPIO_PORT_0), host->cfg.spics_io_num, host->cs_in_signal);
     } else {
@@ -166,8 +172,8 @@ esp_err_t spi_slave_initialize(spi_host_device_t host, const spi_bus_config_t *b
     // spi_slave_t contains atomic variable, memory must be allocated from internal memory
     spihost[host] = heap_caps_malloc(sizeof(spi_slave_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (spihost[host] == NULL) {
-        ret = ESP_ERR_NO_MEM;
-        goto cleanup;
+        spicommon_periph_free(host);
+        return ESP_ERR_NO_MEM;
     }
     memset(spihost[host], 0, sizeof(spi_slave_t));
     spihost[host]->transaction_lock = (portMUX_TYPE)portMUX_INITIALIZER_UNLOCKED;
@@ -176,12 +182,14 @@ esp_err_t spi_slave_initialize(spi_host_device_t host, const spi_bus_config_t *b
     spihost[host]->id = host;
     spi_slave_hal_context_t *hal = &spihost[host]->hal;
 
-    spihost[host]->dma_enabled = (dma_chan != SPI_DMA_DISABLED);
-    if (spihost[host]->dma_enabled) {
+    if (dma_chan != SPI_DMA_DISABLED) {
         ret = spicommon_dma_chan_alloc(host, dma_chan, &spihost[host]->dma_ctx);
         if (ret != ESP_OK) {
             goto cleanup;
         }
+        // Set this only after dma_ctx is valid. The common cleanup path uses
+        // dma_enabled to decide whether it can release that context.
+        spihost[host]->dma_enabled = true;
         ret = spicommon_dma_desc_alloc(spihost[host]->dma_ctx, bus_config->max_transfer_sz, &spihost[host]->max_transfer_sz);
         if (ret != ESP_OK) {
             goto cleanup;
