@@ -244,8 +244,40 @@ IRAM_ATTR static bool i2c_slave_handle_stretch_event(i2c_slave_dev_t *i2c_slave,
             i2c_ll_slave_clear_stretch(hal->dev);
         }
     } else if (cause == I2C_SLAVE_STRETCH_CAUSE_TX_EMPTY) {
-        xTaskWoken |= i2c_slave_handle_tx_fifo(i2c_slave, NULL);
-        i2c_ll_slave_clear_stretch(hal->dev);
+        // Make the request visible before checking the software buffer. This
+        // closes the race with i2c_slave_write: if a writer queues data while
+        // the ISR is servicing TX_EMPTY, it can fill the FIFO and release the
+        // stretch itself.
+        portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
+        bool transmit_active = i2c_slave->transmit_active;
+        i2c_slave->request_pending = transmit_active;
+        portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
+
+        // TX_EMPTY can be latched together with transaction completion after
+        // the controller NACKs the last byte. It no longer represents a data
+        // request in that case.
+        if (!transmit_active) {
+            i2c_ll_slave_clear_stretch(hal->dev);
+            return xTaskWoken;
+        }
+
+        size_t loaded = 0;
+        xTaskWoken |= i2c_slave_handle_tx_fifo(i2c_slave, &loaded);
+        if (loaded != 0) {
+            portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
+            i2c_slave->request_pending = false;
+            portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
+            i2c_ll_slave_clear_stretch(hal->dev);
+        } else {
+            bool request_pending;
+            portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
+            request_pending = i2c_slave->request_pending;
+            portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
+            if (request_pending && i2c_slave->request_callback) {
+                i2c_slave_request_event_data_t evt_data = {};
+                xTaskWoken |= i2c_slave->request_callback(i2c_slave, &evt_data, i2c_slave->user_ctx);
+            }
+        }
     } else if (cause == I2C_SLAVE_STRETCH_CAUSE_RX_FULL) {
         xTaskWoken |= i2c_slave_handle_rx_fifo(i2c_slave, rx_fifo_exist_len);
         i2c_ll_slave_clear_stretch(hal->dev);
@@ -307,8 +339,10 @@ IRAM_ATTR static void i2c_slave_isr_handler(void *arg)
 #if SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
         if (slave_rw == I2C_SLAVE_READ_BY_MASTER) {
             portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
+            i2c_slave->request_pending = false;
             i2c_slave->transmit_active = false;
             portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
+            i2c_ll_slave_clear_stretch(hal->dev);
         }
 #endif
     }

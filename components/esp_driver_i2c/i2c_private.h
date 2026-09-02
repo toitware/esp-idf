@@ -234,7 +234,7 @@ struct i2c_slave_dev_t {
     uint32_t tx_data_count;                           // callback-provided bytes loaded for the current transaction
     i2c_slave_receive_t receive_desc;                 // slave receive descriptor
     bool receive_overflow;                            // bytes were dropped in the current receive transaction
-    bool request_pending;                             // target is stretching at a read address match
+    bool request_pending;                             // target is stretching while waiting for transmit data
     bool transmit_active;                             // controller is reading from the target
 };
 
