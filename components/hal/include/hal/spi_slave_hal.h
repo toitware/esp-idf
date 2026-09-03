@@ -162,6 +162,17 @@ void spi_slave_hal_set_trans_bitlen(spi_slave_hal_context_t *hal);
 void spi_slave_hal_enable_data_line(spi_slave_hal_context_t *hal);
 
 /**
+ * Select the slave data-line edges for the current bus configuration.
+ *
+ * @param hal              Context of the HAL layer.
+ * @param receive_enabled  Whether MOSI is connected.
+ * @param transmit_enabled Whether MISO is connected.
+ */
+void spi_slave_hal_select_data_line_edges(spi_slave_hal_context_t *hal,
+                                          bool receive_enabled,
+                                          bool transmit_enabled);
+
+/**
  * Trigger start a user-defined transaction.
  *
  * @param hal Context of the HAL layer.
