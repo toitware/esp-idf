@@ -114,7 +114,8 @@ esp_err_t spi_slave_initialize(spi_host_device_t host, const spi_bus_config_t *b
  * @param host SPI peripheral to free
  * @return
  *         - ESP_ERR_INVALID_ARG   if parameter is invalid
- *         - ESP_ERR_INVALID_STATE if not all devices on the bus are freed
+ *         - ESP_ERR_INVALID_STATE if a transaction is queued, active, or
+ *           being aborted
  *         - ESP_OK                on success
  */
 esp_err_t spi_slave_free(spi_host_device_t host);

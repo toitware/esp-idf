@@ -40,6 +40,28 @@ extern "C" {
 esp_err_t spi_slave_queue_reset(spi_host_device_t host);
 
 /**
+ * @brief Abort the transaction currently mounted by the slave driver
+ *
+ * The abort is asynchronous. When this function returns `ESP_OK`, the driver
+ * disconnects CS and retires the transaction from interrupt context. The
+ * configured `post_trans_cb` is called after the peripheral and DMA no longer
+ * access the transaction or its buffers. A queued transaction is not affected.
+ *
+ * @note The transaction must already be mounted, and the slave must have a CS
+ * pin configured.
+ *
+ * @param host SPI peripheral that is acting as a slave
+ * @param trans_desc Transaction to abort
+ *
+ * @return
+ *         - ESP_ERR_INVALID_ARG if a parameter is invalid
+ *         - ESP_ERR_INVALID_STATE if the transaction is not currently mounted
+ *         - ESP_ERR_NOT_SUPPORTED if the slave has no CS pin configured
+ *         - ESP_OK if the abort was requested
+ */
+esp_err_t spi_slave_abort_transaction(spi_host_device_t host, const spi_slave_transaction_t *trans_desc);
+
+/**
  * @brief Reset the trans Queue from within ISR of slave driver
  * @note
  * This API is used to reset SPI Slave transaction queue from within ISR. After calling this function:
