@@ -316,12 +316,12 @@ esp_err_t i2c_master_bus_reset(i2c_master_bus_handle_t bus_handle);
  *
  * @param[in] bus_handle I2C bus handle.
  * @return
- *      - ESP_OK: The transaction was aborted and the bus was cleared.
+ *      - ESP_OK: The transaction was aborted and the controller state was
+ *        reset. Call i2c_master_bus_reset to perform physical bus recovery if
+ *        a target continues to hold a line low.
  *      - ESP_ERR_INVALID_ARG: The bus handle is invalid.
  *      - ESP_ERR_INVALID_STATE: The bus is not asynchronous, has no active
  *        transaction, or has queued transactions.
- *      - Otherwise: The transaction was retired safely, but clearing the
- *        physical bus failed.
  */
 esp_err_t i2c_master_bus_abort_transaction(i2c_master_bus_handle_t bus_handle);
 

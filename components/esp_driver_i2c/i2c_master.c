@@ -47,7 +47,6 @@ static const char *TAG = "i2c.master";
 #endif
 
 #define I2C_CLR_BUS_TIMEOUT_MS        (50)  // 50ms is sufficient for clearing the bus
-#define I2C_ASYNC_BUS_BUSY_WAIT_US    (10)  // Allow the hardware status to settle without trapping the ISR
 
 static bool IRAM_ATTR s_i2c_current_transaction_is_async(i2c_master_bus_handle_t i2c_master)
 {
@@ -621,19 +620,6 @@ static bool s_i2c_send_command_async(i2c_master_bus_handle_t i2c_master, BaseTyp
         i2c_master->event = I2C_EVENT_ALIVE;
         return true;
     }
-    int wait_us = 0;
-    while (i2c_ll_is_bus_busy(hal->dev) && wait_us++ < I2C_ASYNC_BUS_BUSY_WAIT_US) {
-        if (atomic_load(&i2c_master->abort_requested)) {
-            return false;
-        }
-        esp_rom_delay_us(1);
-    }
-    if (i2c_ll_is_bus_busy(hal->dev)) {
-        // Leave the ISR so a software timeout can abort and reset the bus,
-        // including on single-core targets.
-        return false;
-    }
-
     while (i2c_master->i2c_trans.cmd_count && !needs_start) {
         i2c_master->in_progress = true;
         i2c_master->sent_all = false;
@@ -710,6 +696,7 @@ static esp_err_t s_i2c_transaction_start(i2c_master_dev_handle_t i2c_dev, int xf
     i2c_master->read_buf_pos = 0;
     i2c_master->contains_read = false;
     i2c_master->async_error_event = I2C_EVENT_ALIVE;
+    i2c_master->async_stopping_after_nack = false;
 
     s_i2c_apply_transaction_config(i2c_master);
 
@@ -834,8 +821,35 @@ static void IRAM_ATTR i2c_master_isr_handler_default(void *arg)
             goto isr_exit;
         }
         i2c_master_event_t interrupt_event = i2c_master->event;
-        if (!s_i2c_send_command_async(i2c_master, &HPTaskAwoken)) {
+        if (interrupt_event == I2C_EVENT_NACK && !i2c_master->async_stopping_after_nack) {
+            // The hardware skips later command slots after a NACK. Start a
+            // standalone STOP and keep the transaction alive until its
+            // MST_COMPLETE interrupt. This releases the bus before user code
+            // can remove the device and preserves the NACK for the callback.
+            const i2c_ll_hw_cmd_t stop_command = {
+                .op_code = I2C_LL_CMD_STOP,
+            };
+            i2c_master->i2c_trans.cmd_count = 0;
+            i2c_master->cmd_idx = 0;
+            i2c_master->rx_cnt = 0;
+            i2c_master->read_len_static = 0;
+            i2c_master->read_buf_pos = 0;
+            i2c_master->contains_read = false;
+            i2c_master->sent_all = true;
+            i2c_master->async_stopping_after_nack = true;
+            portENTER_CRITICAL_ISR(&i2c_master->base->spinlock);
+            i2c_ll_master_write_cmd_reg(hal->dev, stop_command, 0);
+            i2c_hal_master_trans_start(hal);
+            portEXIT_CRITICAL_ISR(&i2c_master->base->spinlock);
             goto isr_exit;
+        }
+        // Do not retire the transaction while the standalone STOP is still
+        // active. Once it completes, run the normal empty-command path to
+        // release its operation slot and make the next queued transfer ready.
+        if (!i2c_master->async_stopping_after_nack || i2c_master->trans_done) {
+            if (!s_i2c_send_command_async(i2c_master, &HPTaskAwoken)) {
+                goto isr_exit;
+            }
         }
         if (atomic_load(&i2c_master->abort_requested)) {
             goto isr_exit;
@@ -850,6 +864,7 @@ static void IRAM_ATTR i2c_master_isr_handler_default(void *arg)
             // Claim completion before calling application code. Further
             // interrupts for this transaction are stale and are ignored.
             i2c_master->transaction_active = false;
+            i2c_master->async_stopping_after_nack = false;
             i2c_master_event_data_t evt = {
                 .event = i2c_master->async_error_event == I2C_EVENT_ALIVE
                 ? I2C_EVENT_DONE
@@ -889,6 +904,7 @@ static void IRAM_ATTR i2c_master_isr_handler_default(void *arg)
                     i2c_master->read_buf_pos = 0;
                     i2c_master->contains_read = false;
                     i2c_master->async_error_event = I2C_EVENT_ALIVE;
+                    i2c_master->async_stopping_after_nack = false;
                     s_i2c_load_transaction(i2c_master, &t);
                     i2c_master->transaction_active = true;
                     s_i2c_apply_transaction_config(i2c_master);
@@ -949,9 +965,6 @@ static esp_err_t i2c_master_bus_destroy(i2c_master_bus_handle_t bus_handle)
             }
             if (i2c_master->event_queue) {
                 vQueueDeleteWithCaps(i2c_master->event_queue);
-            }
-            if (i2c_master->queues_storage) {
-                free(i2c_master->queues_storage);
             }
             free(i2c_master->i2c_async_ops);
             for (int i = 0; i < I2C_TRANS_QUEUE_MAX; i++) {
@@ -1176,7 +1189,7 @@ esp_err_t i2c_new_master_bus(const i2c_master_bus_config_t *bus_config, i2c_mast
     portEXIT_CRITICAL(&i2c_master->base->spinlock);
 
     if (bus_config->intr_priority) {
-        ESP_RETURN_ON_FALSE(1 << (bus_config->intr_priority) & I2C_ALLOW_INTR_PRIORITY_MASK, ESP_ERR_INVALID_ARG, TAG, "invalid interrupt priority:%d", bus_config->intr_priority);
+        ESP_GOTO_ON_FALSE(1 << (bus_config->intr_priority) & I2C_ALLOW_INTR_PRIORITY_MASK, ESP_ERR_INVALID_ARG, err, TAG, "invalid interrupt priority:%d", bus_config->intr_priority);
     }
 
 #if I2C_USE_RETENTION_LINK
@@ -1195,25 +1208,19 @@ esp_err_t i2c_new_master_bus(const i2c_master_bus_config_t *bus_config, i2c_mast
         i2c_master->trans_finish = true;
         i2c_master->new_queue = true;
         i2c_master->queue_size = bus_config->trans_queue_depth;
-        i2c_master->queues_storage = (uint8_t*)heap_caps_calloc(bus_config->trans_queue_depth * I2C_TRANS_QUEUE_MAX, sizeof(i2c_transaction_t), I2C_MEM_ALLOC_CAPS);
-        ESP_RETURN_ON_FALSE(i2c_master->queues_storage, ESP_ERR_NO_MEM, TAG, "no mem for queue storage");
-        i2c_transaction_t **pp_trans_desc = (i2c_transaction_t **)i2c_master->queues_storage;
         for (int i = 0; i < I2C_TRANS_QUEUE_MAX; i++) {
             i2c_master->trans_queues[i] = xQueueCreate(bus_config->trans_queue_depth, sizeof(i2c_transaction_t));
-
-            pp_trans_desc += bus_config->trans_queue_depth;
-            // sanity check
-            assert(i2c_master->trans_queues[i]);
+            ESP_GOTO_ON_FALSE(i2c_master->trans_queues[i], ESP_ERR_NO_MEM, err, TAG, "no mem for transaction queue");
         }
         i2c_transaction_t trans_pre = {};
         for (int i = 0; i < bus_config->trans_queue_depth ; i++) {
             trans_pre = i2c_master->i2c_trans_pool[i];
-            ESP_RETURN_ON_FALSE(xQueueSend(i2c_master->trans_queues[I2C_TRANS_QUEUE_READY], &trans_pre, 0) == pdTRUE,
-                                ESP_ERR_INVALID_STATE, TAG, "ready queue full");
+            ESP_GOTO_ON_FALSE(xQueueSend(i2c_master->trans_queues[I2C_TRANS_QUEUE_READY], &trans_pre, 0) == pdTRUE,
+                              ESP_ERR_INVALID_STATE, err, TAG, "ready queue full");
         }
 
         i2c_master->i2c_async_ops = (i2c_operation_t(*)[I2C_STATIC_OPERATION_ARRAY_MAX])heap_caps_calloc(bus_config->trans_queue_depth, sizeof(*i2c_master->i2c_async_ops), I2C_MEM_ALLOC_CAPS);
-        ESP_RETURN_ON_FALSE(i2c_master->i2c_async_ops, ESP_ERR_NO_MEM, TAG, "no mem for operations");
+        ESP_GOTO_ON_FALSE(i2c_master->i2c_async_ops, ESP_ERR_NO_MEM, err, TAG, "no mem for operations");
         i2c_master->ops_prepare_idx = 0;
 
     }
@@ -1327,8 +1334,8 @@ esp_err_t i2c_master_bus_abort_transaction(i2c_master_bus_handle_t bus_handle)
 
     bool aborted = false;
     bool queued = false;
-    // Publish the request before taking transaction_lock so the ISR leaves its
-    // bounded bus-busy wait and skips completion callbacks for this transaction.
+    // Publish the request before taking transaction_lock so the ISR skips the
+    // completion callback if it entered just before the abort.
     atomic_store(&bus_handle->abort_requested, true);
     portENTER_CRITICAL(&bus_handle->transaction_lock);
     queued = bus_handle->queue_trans || bus_handle->num_trans_inqueue != 0;
@@ -1354,23 +1361,19 @@ esp_err_t i2c_master_bus_abort_transaction(i2c_master_bus_handle_t bus_handle)
         bus_handle->new_queue = true;
         bus_handle->event = I2C_EVENT_ALIVE;
         bus_handle->async_error_event = I2C_EVENT_ALIVE;
+        bus_handle->async_stopping_after_nack = false;
+        // Reset only the local controller FSM. Physical bus recovery can wait
+        // for GPIO levels and is deliberately left to i2c_master_bus_reset.
+        s_i2c_hw_fsm_reset(bus_handle, false);
+        atomic_store(&bus_handle->status, I2C_STATUS_IDLE);
         aborted = true;
     }
+    atomic_store(&bus_handle->abort_requested, false);
     portEXIT_CRITICAL(&bus_handle->transaction_lock);
 
-    if (queued || !aborted) {
-        atomic_store(&bus_handle->abort_requested, false);
-    }
     ESP_RETURN_ON_FALSE(!queued, ESP_ERR_INVALID_STATE, TAG, "cannot abort a bus with queued transactions");
     ESP_RETURN_ON_FALSE(aborted, ESP_ERR_INVALID_STATE, TAG, "no active transaction");
-
-    // The interrupt handler can no longer access the retired transaction.
-    // Clear the physical bus outside the critical section because a target
-    // can hold a line low until the bounded bus-clear timeout expires.
-    esp_err_t ret = s_i2c_hw_fsm_reset(bus_handle, true);
-    atomic_store(&bus_handle->status, I2C_STATUS_IDLE);
-    atomic_store(&bus_handle->abort_requested, false);
-    return ret;
+    return ESP_OK;
 }
 
 esp_err_t i2c_master_get_bus_handle(i2c_port_num_t port_num, i2c_master_bus_handle_t *ret_handle)
