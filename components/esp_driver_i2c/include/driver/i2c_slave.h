@@ -186,6 +186,34 @@ typedef struct {
  */
 esp_err_t i2c_slave_write(i2c_slave_dev_handle_t i2c_slave, const uint8_t *data, uint32_t len, uint32_t *write_len, int timeout_ms);
 
+/**
+ * @brief Set the response served while no buffered transmit data is available.
+ *
+ * The default response is loaded from the start for every controller read
+ * transaction while the transmit stream is empty. Data queued by
+ * `i2c_slave_write` supersedes it. Once the queued stream has been consumed and
+ * its read transaction completes, the default response is restored.
+ *
+ * A write queued while the default response is active is installed at a read
+ * transaction boundary. The controller may therefore receive the default once
+ * more before receiving the queued data. A later call to this function stages
+ * a replacement that is installed the next time the default is loaded.
+ *
+ * The default response must fit in the hardware FIFO. A controller must not
+ * read more bytes than the selected default or buffered response contains.
+ *
+ * @param[in] i2c_slave I2C slave device handle that created by `i2c_new_slave_device`.
+ * @param[in] data Response returned when no buffered transmit data is available.
+ * @param[in] len Response length in bytes. Must be between one and `SOC_I2C_FIFO_LEN`.
+ * @return
+ *      - ESP_OK: Response installed or staged successfully.
+ *      - ESP_ERR_INVALID_ARG: Parameter invalid or response does not fit in the FIFO.
+ *      - ESP_ERR_INVALID_STATE: A transmit callback or buffered transmit data is already active on the first call.
+ *      - ESP_ERR_NO_MEM: Allocation failed while enabling the default response.
+ *      - ESP_ERR_TIMEOUT: Another operation is in progress.
+ */
+esp_err_t i2c_slave_set_default_response(i2c_slave_dev_handle_t i2c_slave, const uint8_t *data, uint32_t len);
+
 #endif // CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2
 
 /**
