@@ -843,7 +843,10 @@ static void IRAM_ATTR i2c_master_isr_handler_default(void *arg)
             portEXIT_CRITICAL_ISR(&i2c_master->base->spinlock);
             goto isr_exit;
         }
-        if (!i2c_master->async_stopping_after_nack) {
+        // Do not retire the transaction while the standalone STOP is still
+        // active. Once it completes, run the normal empty-command path to
+        // release its operation slot and make the next queued transfer ready.
+        if (!i2c_master->async_stopping_after_nack || i2c_master->trans_done) {
             if (!s_i2c_send_command_async(i2c_master, &HPTaskAwoken)) {
                 goto isr_exit;
             }
