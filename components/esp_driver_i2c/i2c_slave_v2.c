@@ -32,7 +32,7 @@
 
 static const char *TAG = "i2c.slave";
 
-IRAM_ATTR static bool i2c_slave_read_rx(i2c_slave_dev_t *i2c_slave, uint8_t *data, size_t len, size_t *read_len)
+I2C_SLAVE_ISR_ATTR static bool i2c_slave_read_rx(i2c_slave_dev_t *i2c_slave, uint8_t *data, size_t len, size_t *read_len)
 {
     BaseType_t xTaskWoken = pdFALSE;
     size_t read_size = len;
@@ -62,7 +62,7 @@ IRAM_ATTR static bool i2c_slave_read_rx(i2c_slave_dev_t *i2c_slave, uint8_t *dat
     return xTaskWoken;
 }
 
-IRAM_ATTR static bool i2c_slave_handle_tx_fifo(i2c_slave_dev_t *i2c_slave, size_t *loaded)
+I2C_SLAVE_ISR_ATTR static bool i2c_slave_handle_tx_fifo(i2c_slave_dev_t *i2c_slave, size_t *loaded)
 {
     BaseType_t xTaskWoken = pdFALSE;
     i2c_hal_context_t *hal = &i2c_slave->base->hal;
@@ -129,7 +129,7 @@ IRAM_ATTR static bool i2c_slave_handle_tx_fifo(i2c_slave_dev_t *i2c_slave, size_
 }
 
 // The caller must hold the bus spinlock.
-IRAM_ATTR static void i2c_slave_discard_tx_buffer_from_isr(
+I2C_SLAVE_ISR_ATTR static void i2c_slave_discard_tx_buffer_from_isr(
     i2c_slave_dev_t *i2c_slave, BaseType_t *task_woken)
 {
     while (true) {
@@ -143,7 +143,7 @@ IRAM_ATTR static void i2c_slave_discard_tx_buffer_from_isr(
     }
 }
 
-IRAM_ATTR static bool i2c_slave_handle_default_response(i2c_slave_dev_t *i2c_slave, BaseType_t *task_woken)
+I2C_SLAVE_ISR_ATTR static bool i2c_slave_handle_default_response(i2c_slave_dev_t *i2c_slave, BaseType_t *task_woken)
 {
     i2c_hal_context_t *hal = &i2c_slave->base->hal;
     portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
@@ -205,7 +205,7 @@ IRAM_ATTR static bool i2c_slave_handle_default_response(i2c_slave_dev_t *i2c_sla
 }
 
 #if SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
-IRAM_ATTR static bool i2c_slave_load_default_response(i2c_slave_dev_t *i2c_slave)
+I2C_SLAVE_ISR_ATTR static bool i2c_slave_load_default_response(i2c_slave_dev_t *i2c_slave)
 {
     i2c_hal_context_t *hal = &i2c_slave->base->hal;
     portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
@@ -228,7 +228,7 @@ IRAM_ATTR static bool i2c_slave_load_default_response(i2c_slave_dev_t *i2c_slave
     return true;
 }
 
-IRAM_ATTR static bool i2c_slave_handle_tx_done(i2c_slave_dev_t *i2c_slave)
+I2C_SLAVE_ISR_ATTR static bool i2c_slave_handle_tx_done(i2c_slave_dev_t *i2c_slave)
 {
     if (!i2c_slave->transmit_callback) {
         return false;
@@ -262,7 +262,7 @@ IRAM_ATTR static bool i2c_slave_handle_tx_done(i2c_slave_dev_t *i2c_slave)
 }
 #endif
 
-IRAM_ATTR static bool i2c_slave_handle_rx_fifo(i2c_slave_dev_t *i2c_slave, uint32_t len)
+I2C_SLAVE_ISR_ATTR static bool i2c_slave_handle_rx_fifo(i2c_slave_dev_t *i2c_slave, uint32_t len)
 {
     i2c_hal_context_t *hal = &i2c_slave->base->hal;
     uint8_t data[SOC_I2C_FIFO_LEN];
@@ -318,7 +318,7 @@ static void i2c_slave_discard_tx_buffer(i2c_slave_dev_t *i2c_slave)
 #endif
 
 #if SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
-IRAM_ATTR static bool i2c_slave_handle_stretch_event(i2c_slave_dev_t *i2c_slave, uint32_t rx_fifo_exist_len, i2c_slave_read_write_status_t slave_rw)
+I2C_SLAVE_ISR_ATTR static bool i2c_slave_handle_stretch_event(i2c_slave_dev_t *i2c_slave, uint32_t rx_fifo_exist_len, i2c_slave_read_write_status_t slave_rw)
 {
     i2c_slave_stretch_cause_t cause;
     BaseType_t xTaskWoken = pdFALSE;
@@ -464,7 +464,7 @@ IRAM_ATTR static bool i2c_slave_handle_stretch_event(i2c_slave_dev_t *i2c_slave,
 }
 #endif
 
-IRAM_ATTR static void i2c_slave_isr_handler(void *arg)
+I2C_SLAVE_ISR_ATTR static void i2c_slave_isr_handler(void *arg)
 {
     BaseType_t pxHigherPriorityTaskWoken = false;
     i2c_slave_dev_t *i2c_slave = (i2c_slave_dev_t *)arg;
@@ -551,6 +551,11 @@ static esp_err_t i2c_slave_device_destroy(i2c_slave_dev_handle_t i2c_slave)
         i2c_ll_disable_intr_mask(i2c_slave->base->hal.dev, I2C_LL_SLAVE_EVENT_INTR);
         i2c_common_deinit_pins(i2c_slave->base);
         ret = i2c_release_bus_handle(i2c_slave->base);
+        if (ret != ESP_OK) {
+            // Interrupt teardown did not complete, so the ISR may still refer
+            // to the slave and its owned resources.
+            return ret;
+        }
     }
     if (i2c_slave->rx_ring_buf) {
         vRingbufferDeleteWithCaps(i2c_slave->rx_ring_buf);
@@ -959,7 +964,12 @@ esp_err_t i2c_slave_set_buffered_write_pending(i2c_slave_dev_handle_t i2c_slave,
     } else if (!pending && i2c_slave->request_pending && response && response->enabled) {
         uint32_t free_fifo_len = 0;
         i2c_ll_get_txfifo_len(i2c_slave->base->hal.dev, &free_fifo_len);
-        if (free_fifo_len == SOC_I2C_FIFO_LEN) {
+        size_t loaded = i2c_slave_fill_tx_fifo(i2c_slave, free_fifo_len);
+        if (loaded != 0) {
+            i2c_ll_slave_enable_tx_it(i2c_slave->base->hal.dev);
+            i2c_slave->request_pending = false;
+            release_request = true;
+        } else if (free_fifo_len == SOC_I2C_FIFO_LEN) {
             if (response->pending) {
                 response->active ^= 1;
                 response->pending = false;

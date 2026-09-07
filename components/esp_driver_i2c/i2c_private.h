@@ -44,8 +44,10 @@ extern "C" {
 
 #if CONFIG_I2C_ISR_IRAM_SAFE
 #define I2C_MEM_ALLOC_CAPS    (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+#define I2C_SLAVE_ISR_ATTR    IRAM_ATTR
 #else
 #define I2C_MEM_ALLOC_CAPS     (MALLOC_CAP_DEFAULT)
+#define I2C_SLAVE_ISR_ATTR
 #endif
 
 // I2C driver object is per-mode, the interrupt source is shared between modes

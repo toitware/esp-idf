@@ -229,8 +229,8 @@ esp_err_t i2c_slave_set_default_response(i2c_slave_dev_handle_t i2c_slave, const
  * stretching. If disabled during a transaction already using the default
  * response, that transaction continues using it until its boundary.
  *
- * @param i2c_slave I2C slave device handle.
- * @param enabled Whether the default response should be served.
+ * @param[in] i2c_slave I2C slave device handle.
+ * @param[in] enabled Whether the default response should be served.
  * @return
  *      - ESP_OK: The mode was changed.
  *      - ESP_ERR_INVALID_ARG: The handle is invalid.
@@ -250,8 +250,8 @@ esp_err_t i2c_slave_set_default_response_enabled(i2c_slave_dev_handle_t i2c_slav
  *
  * This is a no-op on targets without response-time clock stretching.
  *
- * @param i2c_slave I2C slave device handle.
- * @param pending Whether more bytes of the current buffered response follow.
+ * @param[in] i2c_slave I2C slave device handle.
+ * @param[in] pending Whether more bytes of the current buffered response follow.
  * @return
  *      - ESP_OK: The state was changed.
  *      - ESP_ERR_INVALID_ARG: The handle is invalid.

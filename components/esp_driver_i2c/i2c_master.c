@@ -946,41 +946,49 @@ static esp_err_t i2c_param_master_config(i2c_bus_handle_t handle, const i2c_mast
 
 static esp_err_t i2c_master_bus_destroy(i2c_master_bus_handle_t bus_handle)
 {
-    ESP_RETURN_ON_FALSE(bus_handle, ESP_ERR_INVALID_ARG, TAG, "no memory for i2c master bus");
+    ESP_RETURN_ON_FALSE(bus_handle, ESP_ERR_INVALID_ARG, TAG, "invalid argument");
     i2c_master_bus_handle_t i2c_master = bus_handle;
     esp_err_t err = ESP_OK;
+
     if (i2c_master->base) {
-        i2c_common_deinit_pins(i2c_master->base);
-        err = i2c_release_bus_handle(i2c_master->base);
-    }
-    if (err == ESP_OK) {
-        if (i2c_master) {
-            if (i2c_master->bus_lock_mux) {
-                vSemaphoreDeleteWithCaps(i2c_master->bus_lock_mux);
-                i2c_master->bus_lock_mux = NULL;
-            }
-            if (i2c_master->cmd_semphr) {
-                vSemaphoreDeleteWithCaps(i2c_master->cmd_semphr);
-                i2c_master->cmd_semphr = NULL;
-            }
-            if (i2c_master->event_queue) {
-                vQueueDeleteWithCaps(i2c_master->event_queue);
-            }
-            free(i2c_master->i2c_async_ops);
-            for (int i = 0; i < I2C_TRANS_QUEUE_MAX; i++) {
-                if (i2c_master->trans_queues[i]) {
-                    vQueueDelete(i2c_master->trans_queues[i]);
-                }
-            }
-            bus_handle = NULL;
+        err = i2c_common_deinit_pins(i2c_master->base);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "failed to deinit i2c pins: %s", esp_err_to_name(err));
         }
-
-        free(i2c_master);
-    } else {
-        free(i2c_master);
+        esp_err_t release_ret = i2c_release_bus_handle(i2c_master->base);
+        if (release_ret != ESP_OK) {
+            ESP_LOGE(TAG, "failed to release bus handle: %s", esp_err_to_name(release_ret));
+            if (err == ESP_OK) {
+                err = release_ret;
+            }
+            // The ISR may still refer to the bus and its owned resources.
+            return err;
+        }
     }
 
-    return ESP_OK;
+    if (i2c_master->bus_lock_mux) {
+        vSemaphoreDeleteWithCaps(i2c_master->bus_lock_mux);
+        i2c_master->bus_lock_mux = NULL;
+    }
+    if (i2c_master->cmd_semphr) {
+        vSemaphoreDeleteWithCaps(i2c_master->cmd_semphr);
+        i2c_master->cmd_semphr = NULL;
+    }
+    if (i2c_master->event_queue) {
+        vQueueDeleteWithCaps(i2c_master->event_queue);
+        i2c_master->event_queue = NULL;
+    }
+    free(i2c_master->i2c_async_ops);
+    i2c_master->i2c_async_ops = NULL;
+    for (int i = 0; i < I2C_TRANS_QUEUE_MAX; i++) {
+        if (i2c_master->trans_queues[i]) {
+            vQueueDelete(i2c_master->trans_queues[i]);
+            i2c_master->trans_queues[i] = NULL;
+        }
+    }
+
+    free(i2c_master);
+    return err;
 }
 
 static esp_err_t s_i2c_asynchronous_transaction(i2c_master_dev_handle_t i2c_dev, i2c_operation_t *i2c_ops, size_t ops_dim, int timeout_ms)
