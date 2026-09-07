@@ -128,6 +128,21 @@ IRAM_ATTR static bool i2c_slave_handle_tx_fifo(i2c_slave_dev_t *i2c_slave, size_
     return xTaskWoken;
 }
 
+// The caller must hold the bus spinlock.
+IRAM_ATTR static void i2c_slave_discard_tx_buffer_from_isr(
+    i2c_slave_dev_t *i2c_slave, BaseType_t *task_woken)
+{
+    while (true) {
+        size_t length = 0;
+        uint8_t *data = xRingbufferReceiveUpToFromISR(
+                            i2c_slave->tx_ring_buf, &length, SIZE_MAX);
+        if (!data) {
+            return;
+        }
+        vRingbufferReturnItemFromISR(i2c_slave->tx_ring_buf, data, task_woken);
+    }
+}
+
 IRAM_ATTR static bool i2c_slave_handle_default_response(i2c_slave_dev_t *i2c_slave, BaseType_t *task_woken)
 {
     i2c_hal_context_t *hal = &i2c_slave->base->hal;
@@ -139,6 +154,17 @@ IRAM_ATTR static bool i2c_slave_handle_default_response(i2c_slave_dev_t *i2c_sla
     }
 
     i2c_ll_slave_disable_tx_it(hal->dev);
+    if (!response->enabled) {
+        // Handler responses belong to one controller transaction. A controller
+        // may NACK after the peripheral has already popped the following byte,
+        // so preserving a partial FIFO here cannot preserve the byte stream.
+        // Discard the whole tail and ask the handler again on the next read.
+        i2c_ll_txfifo_rst(hal->dev);
+        i2c_slave_discard_tx_buffer_from_isr(i2c_slave, task_woken);
+        response->loaded = false;
+        portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
+        return true;
+    }
     if (response->loaded) {
         // Discard the remainder of the default response at the transaction
         // boundary before looking for an ordinary queued response.
@@ -162,7 +188,7 @@ IRAM_ATTR static bool i2c_slave_handle_default_response(i2c_slave_dev_t *i2c_sla
     if (fifo_len != SOC_I2C_FIFO_LEN) {
         response->loaded = false;
         i2c_ll_slave_enable_tx_it(hal->dev);
-    } else {
+    } else if (response->enabled && !i2c_slave->buffered_write_pending) {
         if (response->pending) {
             response->active ^= 1;
             response->pending = false;
@@ -171,12 +197,37 @@ IRAM_ATTR static bool i2c_slave_handle_default_response(i2c_slave_dev_t *i2c_sla
         i2c_ll_txfifo_rst(hal->dev);
         i2c_ll_write_txfifo(
             hal->dev, response->data[response->active], response->length[response->active]);
+    } else {
+        response->loaded = false;
     }
     portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
     return true;
 }
 
 #if SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
+IRAM_ATTR static bool i2c_slave_load_default_response(i2c_slave_dev_t *i2c_slave)
+{
+    i2c_hal_context_t *hal = &i2c_slave->base->hal;
+    portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
+    i2c_slave_default_response_t *response = i2c_slave->default_response;
+    if (!response || (!response->enabled && !response->loaded)) {
+        portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
+        return false;
+    }
+    if (!response->loaded && response->pending) {
+        response->active ^= 1;
+        response->pending = false;
+    }
+    response->loaded = true;
+    i2c_slave->request_pending = false;
+    i2c_ll_slave_disable_tx_it(hal->dev);
+    i2c_ll_txfifo_rst(hal->dev);
+    i2c_ll_write_txfifo(
+        hal->dev, response->data[response->active], response->length[response->active]);
+    portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
+    return true;
+}
+
 IRAM_ATTR static bool i2c_slave_handle_tx_done(i2c_slave_dev_t *i2c_slave)
 {
     if (!i2c_slave->transmit_callback) {
@@ -251,6 +302,22 @@ static size_t i2c_slave_fill_tx_fifo(i2c_slave_dev_t *i2c_slave, size_t fifo_len
 }
 
 #if SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
+// The caller must hold the bus spinlock and operation_mux.
+static void i2c_slave_discard_tx_buffer(i2c_slave_dev_t *i2c_slave)
+{
+    while (true) {
+        size_t length = 0;
+        uint8_t *data = xRingbufferReceiveUpTo(
+                            i2c_slave->tx_ring_buf, &length, 0, SIZE_MAX);
+        if (!data) {
+            return;
+        }
+        vRingbufferReturnItem(i2c_slave->tx_ring_buf, data);
+    }
+}
+#endif
+
+#if SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
 IRAM_ATTR static bool i2c_slave_handle_stretch_event(i2c_slave_dev_t *i2c_slave, uint32_t rx_fifo_exist_len, i2c_slave_read_write_status_t slave_rw)
 {
     i2c_slave_stretch_cause_t cause;
@@ -279,29 +346,47 @@ IRAM_ATTR static bool i2c_slave_handle_stretch_event(i2c_slave_dev_t *i2c_slave,
             i2c_slave->rx_data_count = 0;
             i2c_slave->receive_overflow = false;
         }
-        i2c_slave_request_event_data_t evt_data = {};
-        if (i2c_slave->request_callback) {
-            xTaskWoken |= i2c_slave->request_callback(i2c_slave, &evt_data, i2c_slave->user_ctx);
+        if (slave_rw != I2C_SLAVE_READ_BY_MASTER) {
+            portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
+            i2c_slave->request_pending = false;
+            portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
+            i2c_ll_slave_clear_stretch(hal->dev);
+            return xTaskWoken;
         }
         portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
-        bool default_response = i2c_slave->default_response != NULL;
+        bool default_response = i2c_slave->default_response &&
+                                i2c_slave->default_response->loaded;
         portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
         if (default_response) {
+            portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
+            i2c_slave->request_pending = false;
+            portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
             i2c_ll_slave_clear_stretch(hal->dev);
             return xTaskWoken;
         }
         // Data may have been queued before the request. Move it into the FIFO
         // and release the address-match stretch without requiring another
-        // i2c_slave_write call. If no data is available, keep stretching so the
-        // request callback can wake a task that produces the response.
+        // i2c_slave_write call. Bytes left in the FIFO by a short controller
+        // read are part of the same buffered response and are used first.
         size_t loaded = 0;
         xTaskWoken |= i2c_slave_handle_tx_fifo(i2c_slave, &loaded);
-        if (loaded != 0) {
+        uint32_t free_fifo_len = 0;
+        portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
+        i2c_ll_get_txfifo_len(hal->dev, &free_fifo_len);
+        portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
+        if (loaded != 0 || free_fifo_len != SOC_I2C_FIFO_LEN) {
             i2c_ll_slave_enable_tx_it(hal->dev);
             portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
             i2c_slave->request_pending = false;
             portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
             i2c_ll_slave_clear_stretch(hal->dev);
+        } else {
+            // Keep stretching while the request callback wakes the task that
+            // will produce the next response.
+            i2c_slave_request_event_data_t evt_data = {};
+            if (i2c_slave->request_callback) {
+                xTaskWoken |= i2c_slave->request_callback(i2c_slave, &evt_data, i2c_slave->user_ctx);
+            }
         }
     } else if (cause == I2C_SLAVE_STRETCH_CAUSE_TX_EMPTY) {
         // Make the request visible before checking the software buffer. This
@@ -321,6 +406,21 @@ IRAM_ATTR static bool i2c_slave_handle_stretch_event(i2c_slave_dev_t *i2c_slave,
             return xTaskWoken;
         }
 
+        portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
+        bool continuing_default = i2c_slave->default_response &&
+                                  i2c_slave->default_response->loaded;
+        portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
+        if (continuing_default && i2c_slave_load_default_response(i2c_slave)) {
+            // Do not splice data queued during an active fallback transaction
+            // into that transaction. Repeat the already selected fallback and
+            // leave the queued data for the next transaction boundary.
+            i2c_ll_slave_clear_stretch(hal->dev);
+            return xTaskWoken;
+        }
+
+        // When the current stream is explicit, its software-buffered tail has
+        // priority over starting a fallback. The watermark and TX-empty causes
+        // can be co-latched, so drain it here before loading the fallback.
         size_t loaded = 0;
         xTaskWoken |= i2c_slave_handle_tx_fifo(i2c_slave, &loaded);
         if (loaded != 0) {
@@ -329,13 +429,31 @@ IRAM_ATTR static bool i2c_slave_handle_stretch_event(i2c_slave_dev_t *i2c_slave,
             portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
             i2c_ll_slave_clear_stretch(hal->dev);
         } else {
-            bool request_pending;
+            bool buffered_write_pending;
             portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
-            request_pending = i2c_slave->request_pending;
+            buffered_write_pending = i2c_slave->buffered_write_pending;
             portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
-            if (request_pending && i2c_slave->request_callback) {
-                i2c_slave_request_event_data_t evt_data = {};
-                xTaskWoken |= i2c_slave->request_callback(i2c_slave, &evt_data, i2c_slave->user_ctx);
+            if (buffered_write_pending) {
+                if (i2c_slave->request_callback) {
+                    i2c_slave_request_event_data_t evt_data = {};
+                    xTaskWoken |= i2c_slave->request_callback(
+                                      i2c_slave, &evt_data, i2c_slave->user_ctx);
+                }
+                return xTaskWoken;
+            }
+            if (i2c_slave_load_default_response(i2c_slave)) {
+                // Repeat a default response, or start it after an explicitly
+                // queued response was exhausted without ending the transaction.
+                i2c_ll_slave_clear_stretch(hal->dev);
+            } else {
+                bool request_pending;
+                portENTER_CRITICAL_ISR(&i2c_slave->base->spinlock);
+                request_pending = i2c_slave->request_pending;
+                portEXIT_CRITICAL_ISR(&i2c_slave->base->spinlock);
+                if (request_pending && i2c_slave->request_callback) {
+                    i2c_slave_request_event_data_t evt_data = {};
+                    xTaskWoken |= i2c_slave->request_callback(i2c_slave, &evt_data, i2c_slave->user_ctx);
+                }
             }
         }
     } else if (cause == I2C_SLAVE_STRETCH_CAUSE_RX_FULL) {
@@ -586,6 +704,9 @@ esp_err_t i2c_slave_write(i2c_slave_dev_handle_t i2c_slave, const uint8_t *data,
     bool request_pending = true;
     bool release_request = false;
     bool default_loaded = false;
+#if SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
+    bool default_superseded = false;
+#endif
 
     if (xSemaphoreTake(i2c_slave->operation_mux, wait_ticks) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
@@ -599,6 +720,26 @@ esp_err_t i2c_slave_write(i2c_slave_dev_handle_t i2c_slave, const uint8_t *data,
         return ESP_ERR_INVALID_STATE;
     }
     default_loaded = i2c_slave->default_response && i2c_slave->default_response->loaded;
+    bool transmit_active = i2c_slave->transmit_active;
+#if !SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
+    // The original ESP32 has no address-match stretch interrupt from which to
+    // maintain transmit_active. Its bus status is sufficient to avoid
+    // replacing a default response in the middle of an active controller
+    // read; data queued then is staged for the following transaction.
+    transmit_active = i2c_ll_is_bus_busy(hal->dev) &&
+                      i2c_ll_slave_get_read_write_status(hal->dev) == I2C_SLAVE_READ_BY_MASTER;
+#endif
+    if (default_loaded && !transmit_active) {
+        // Data queued before a transaction starts supersedes the preloaded
+        // default immediately. A write racing an active default transaction
+        // is staged for the following transaction instead.
+        i2c_ll_txfifo_rst(hal->dev);
+        i2c_slave->default_response->loaded = false;
+        default_loaded = false;
+#if SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
+        default_superseded = true;
+#endif
+    }
     if (!default_loaded) {
 #if !SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
         i2c_ll_slave_disable_tx_it(hal->dev);
@@ -609,7 +750,7 @@ esp_err_t i2c_slave_write(i2c_slave_dev_handle_t i2c_slave, const uint8_t *data,
             i2c_ll_txfifo_rst(hal->dev);
         }
 #else
-        request_pending = i2c_slave->request_pending;
+        request_pending = i2c_slave->request_pending || default_superseded;
 #endif
         if (request_pending) {
             i2c_ll_get_txfifo_len(hal->dev, &free_fifo_len);
@@ -708,6 +849,7 @@ esp_err_t i2c_slave_set_default_response(i2c_slave_dev_handle_t i2c_slave, const
             memcpy(allocated->data[0], data, len);
             allocated->length[0] = len;
             allocated->loaded = true;
+            allocated->enabled = true;
             i2c_slave->default_response = allocated;
             allocated = NULL;
             i2c_ll_slave_disable_tx_it(i2c_slave->base->hal.dev);
@@ -737,6 +879,108 @@ esp_err_t i2c_slave_set_default_response(i2c_slave_dev_handle_t i2c_slave, const
     }
     ESP_RETURN_ON_ERROR(ret, TAG, "cannot set a default response while transmit data is pending");
     return ESP_OK;
+}
+
+esp_err_t i2c_slave_set_default_response_enabled(i2c_slave_dev_handle_t i2c_slave, bool enabled)
+{
+    ESP_RETURN_ON_FALSE(i2c_slave, ESP_ERR_INVALID_ARG, TAG, "i2c slave not initialized");
+#if !SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
+    ESP_RETURN_ON_FALSE(enabled, ESP_ERR_NOT_SUPPORTED, TAG, "target cannot wait for a response");
+    return ESP_OK;
+#else
+    ESP_RETURN_ON_FALSE(xSemaphoreTake(i2c_slave->operation_mux, 0) == pdTRUE,
+                        ESP_ERR_TIMEOUT, TAG, "another operation is in progress");
+
+    bool release_request = false;
+    portENTER_CRITICAL(&i2c_slave->base->spinlock);
+    i2c_slave_default_response_t *response = i2c_slave->default_response;
+    if (!response) {
+        portEXIT_CRITICAL(&i2c_slave->base->spinlock);
+        xSemaphoreGive(i2c_slave->operation_mux);
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    response->enabled = enabled;
+    if (!enabled) {
+        if (!i2c_slave->transmit_active && response->loaded) {
+            i2c_ll_slave_disable_tx_it(i2c_slave->base->hal.dev);
+            i2c_ll_txfifo_rst(i2c_slave->base->hal.dev);
+            response->loaded = false;
+        }
+    } else {
+        // Leaving handler mode abandons that handler's complete response
+        // stream. This includes bytes staged in the software ring buffer.
+        i2c_slave_discard_tx_buffer(i2c_slave);
+        if (response->pending) {
+            response->active ^= 1;
+            response->pending = false;
+        }
+        i2c_ll_slave_disable_tx_it(i2c_slave->base->hal.dev);
+        i2c_ll_txfifo_rst(i2c_slave->base->hal.dev);
+        i2c_ll_write_txfifo(i2c_slave->base->hal.dev,
+                            response->data[response->active],
+                            response->length[response->active]);
+        response->loaded = true;
+        if (i2c_slave->request_pending) {
+            i2c_slave->request_pending = false;
+            release_request = true;
+        }
+    }
+    portEXIT_CRITICAL(&i2c_slave->base->spinlock);
+    xSemaphoreGive(i2c_slave->operation_mux);
+
+    if (release_request) {
+        i2c_ll_slave_clear_stretch(i2c_slave->base->hal.dev);
+    }
+    return ESP_OK;
+#endif
+}
+
+esp_err_t i2c_slave_set_buffered_write_pending(i2c_slave_dev_handle_t i2c_slave, bool pending)
+{
+    ESP_RETURN_ON_FALSE(i2c_slave, ESP_ERR_INVALID_ARG, TAG, "i2c slave not initialized");
+#if !SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
+    return ESP_OK;
+#else
+    ESP_RETURN_ON_FALSE(xSemaphoreTake(i2c_slave->operation_mux, 0) == pdTRUE,
+                        ESP_ERR_TIMEOUT, TAG, "another operation is in progress");
+
+    bool release_request = false;
+    portENTER_CRITICAL(&i2c_slave->base->spinlock);
+    i2c_slave->buffered_write_pending = pending;
+    i2c_slave_default_response_t *response = i2c_slave->default_response;
+    if (pending && response && response->loaded && !i2c_slave->transmit_active) {
+        // A complete blocking write is about to supersede an idle preloaded
+        // fallback. If a fallback transaction is active, leave it untouched
+        // and stage the new response for the next boundary.
+        i2c_ll_slave_disable_tx_it(i2c_slave->base->hal.dev);
+        i2c_ll_txfifo_rst(i2c_slave->base->hal.dev);
+        response->loaded = false;
+    } else if (!pending && i2c_slave->request_pending && response && response->enabled) {
+        uint32_t free_fifo_len = 0;
+        i2c_ll_get_txfifo_len(i2c_slave->base->hal.dev, &free_fifo_len);
+        if (free_fifo_len == SOC_I2C_FIFO_LEN) {
+            if (response->pending) {
+                response->active ^= 1;
+                response->pending = false;
+            }
+            i2c_ll_slave_disable_tx_it(i2c_slave->base->hal.dev);
+            i2c_ll_write_txfifo(i2c_slave->base->hal.dev,
+                                response->data[response->active],
+                                response->length[response->active]);
+            response->loaded = true;
+            i2c_slave->request_pending = false;
+            release_request = true;
+        }
+    }
+    portEXIT_CRITICAL(&i2c_slave->base->spinlock);
+    xSemaphoreGive(i2c_slave->operation_mux);
+
+    if (release_request) {
+        i2c_ll_slave_clear_stretch(i2c_slave->base->hal.dev);
+    }
+    return ESP_OK;
+#endif
 }
 
 esp_err_t i2c_slave_register_event_callbacks(i2c_slave_dev_handle_t i2c_slave, const i2c_slave_event_callbacks_t *cbs, void *user_data)

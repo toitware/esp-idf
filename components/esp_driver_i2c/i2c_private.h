@@ -205,6 +205,7 @@ typedef struct {
     uint8_t active;
     bool pending;
     bool loaded;
+    bool enabled;
 } i2c_slave_default_response_t;
 
 #if !CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2
@@ -245,6 +246,7 @@ struct i2c_slave_dev_t {
     bool receive_overflow;                            // bytes were dropped in the current receive transaction
     bool request_pending;                             // target is stretching while waiting for transmit data
     bool transmit_active;                             // controller is reading from the target
+    bool buffered_write_pending;                      // application will continue a partially buffered response
 };
 
 #endif // CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2

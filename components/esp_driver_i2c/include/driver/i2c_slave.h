@@ -199,8 +199,10 @@ esp_err_t i2c_slave_write(i2c_slave_dev_handle_t i2c_slave, const uint8_t *data,
  * more before receiving the queued data. A later call to this function stages
  * a replacement that is installed the next time the default is loaded.
  *
- * The default response must fit in the hardware FIFO. A controller must not
- * read more bytes than the selected default or buffered response contains.
+ * The default response must fit in the hardware FIFO. Targets with
+ * response-time clock stretching repeat it when a controller continues past
+ * the selected default or buffered response. On targets without that
+ * capability, a controller must not read beyond the available bytes.
  *
  * @param[in] i2c_slave I2C slave device handle that created by `i2c_new_slave_device`.
  * @param[in] data Response returned when no buffered transmit data is available.
@@ -213,6 +215,49 @@ esp_err_t i2c_slave_write(i2c_slave_dev_handle_t i2c_slave, const uint8_t *data,
  *      - ESP_ERR_TIMEOUT: Another operation is in progress.
  */
 esp_err_t i2c_slave_set_default_response(i2c_slave_dev_handle_t i2c_slave, const uint8_t *data, uint32_t len);
+
+/**
+ * @brief Enables or suppresses the configured default response.
+ *
+ * Suppressing the response keeps its contents but lets an address-match or
+ * TX-empty event stretch SCL while application code supplies data. Enabling
+ * it discards any buffered application response and preloads the default. If
+ * the target is already stretching for transmit data, enabling the response
+ * supplies it immediately and releases SCL.
+ *
+ * Disabling is not supported on targets without response-time clock
+ * stretching. If disabled during a transaction already using the default
+ * response, that transaction continues using it until its boundary.
+ *
+ * @param i2c_slave I2C slave device handle.
+ * @param enabled Whether the default response should be served.
+ * @return
+ *      - ESP_OK: The mode was changed.
+ *      - ESP_ERR_INVALID_ARG: The handle is invalid.
+ *      - ESP_ERR_INVALID_STATE: No default response has been configured.
+ *      - ESP_ERR_NOT_SUPPORTED: The target cannot suppress the response.
+ *      - ESP_ERR_TIMEOUT: Another operation is in progress.
+ */
+esp_err_t i2c_slave_set_default_response_enabled(i2c_slave_dev_handle_t i2c_slave, bool enabled);
+
+/**
+ * @brief Records whether a buffered response is still being produced.
+ *
+ * While pending, exhausting currently buffered bytes wakes the request
+ * callback and stretches instead of selecting the default response. Clearing
+ * the flag selects and releases a default immediately if the target is
+ * already waiting and no response data remains.
+ *
+ * This is a no-op on targets without response-time clock stretching.
+ *
+ * @param i2c_slave I2C slave device handle.
+ * @param pending Whether more bytes of the current buffered response follow.
+ * @return
+ *      - ESP_OK: The state was changed.
+ *      - ESP_ERR_INVALID_ARG: The handle is invalid.
+ *      - ESP_ERR_TIMEOUT: Another operation is in progress.
+ */
+esp_err_t i2c_slave_set_buffered_write_pending(i2c_slave_dev_handle_t i2c_slave, bool pending);
 
 #endif // CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2
 
