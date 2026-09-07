@@ -451,6 +451,7 @@ esp_err_t spi_bus_add_device(spi_host_device_t host_id, const spi_device_interfa
     //duplex mode does absolutely nothing on the ESP32.
     SPI_CHECK(dev_config->cs_ena_pretrans <= 1 || (dev_config->address_bits == 0 && dev_config->command_bits == 0) ||
               (dev_config->flags & SPI_DEVICE_HALFDUPLEX), "In full-duplex mode, only support cs pretrans delay = 1 and without address_bits and command_bits", ESP_ERR_INVALID_ARG);
+    SPI_CHECK(dev_config->cs_ena_posttrans <= 15, "cs posttrans delay exceeds the hardware limit", ESP_ERR_INVALID_ARG);
 #endif
 
     //Check post_cb status when `SPI_DEVICE_NO_RETURN_RESULT` flag is set.
