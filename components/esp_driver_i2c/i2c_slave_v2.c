@@ -812,11 +812,27 @@ esp_err_t i2c_slave_write(i2c_slave_dev_handle_t i2c_slave, const uint8_t *data,
     }
 #endif
 
-    xSemaphoreGive(i2c_slave->operation_mux);
     if (release_request) {
+#if SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
+        UBaseType_t buffered_bytes = 0;
+        portENTER_CRITICAL(&i2c_slave->base->spinlock);
+        vRingbufferGetInfo(i2c_slave->tx_ring_buf, NULL, NULL, NULL, NULL, &buffered_bytes);
+        if (buffered_bytes != 0) {
+            i2c_ll_slave_enable_tx_it(hal->dev);
+        } else {
+            // Enabling the watermark interrupt for a short response makes it
+            // fire before the active stretch is released. Let TX-empty cause
+            // the next stretch instead.
+            i2c_ll_slave_disable_tx_it(hal->dev);
+        }
+        i2c_ll_slave_clear_stretch(hal->dev);
+        portEXIT_CRITICAL(&i2c_slave->base->spinlock);
+#else
         i2c_ll_slave_enable_tx_it(hal->dev);
         i2c_ll_slave_clear_stretch(hal->dev);
+#endif
     }
+    xSemaphoreGive(i2c_slave->operation_mux);
 
     return ESP_OK;
 }
