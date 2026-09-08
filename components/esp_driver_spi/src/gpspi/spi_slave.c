@@ -461,6 +461,7 @@ esp_err_t SPI_SLAVE_ATTR spi_slave_queue_trans(spi_host_device_t host, const spi
 
     r = xQueueSend(spihost[host]->trans_queue, (void *)&priv_trans, ticks_to_wait);
     if (!r) {
+        spi_slave_uninstall_priv_trans(host, &priv_trans);
         return ESP_ERR_TIMEOUT;
     }
     esp_intr_enable(spihost[host]->intr);
@@ -679,8 +680,13 @@ static void SPI_SLAVE_ISR_ATTR s_spi_slave_prepare_data(spi_slave_t *host)
     spi_slave_hal_set_trans_bitlen(hal);
 
 #ifdef CONFIG_IDF_TARGET_ESP32
-    //SPI Slave mode on ESP32 requires MOSI/MISO enable
+    // SPI Slave mode on ESP32 requires MOSI/MISO enable.
     spi_slave_hal_enable_data_line(hal);
+#endif
+#ifdef CONFIG_IDF_TARGET_ESP32S3
+    bool receive_enabled = host->bus_config.mosi_io_num >= 0;
+    bool transmit_enabled = host->bus_config.miso_io_num >= 0;
+    spi_slave_hal_select_data_line_edges(hal, receive_enabled, transmit_enabled);
 #endif
 }
 

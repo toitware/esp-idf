@@ -44,8 +44,10 @@ extern "C" {
 
 #if CONFIG_I2C_ISR_IRAM_SAFE
 #define I2C_MEM_ALLOC_CAPS    (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)
+#define I2C_SLAVE_ISR_ATTR    IRAM_ATTR
 #else
 #define I2C_MEM_ALLOC_CAPS     (MALLOC_CAP_DEFAULT)
+#define I2C_SLAVE_ISR_ATTR
 #endif
 
 // I2C driver object is per-mode, the interrupt source is shared between modes
@@ -199,6 +201,15 @@ typedef struct {
     uint32_t rcv_fifo_cnt;      // receive fifo count.
 } i2c_slave_receive_t;
 
+typedef struct {
+    uint8_t data[2][SOC_I2C_FIFO_LEN];
+    uint8_t length[2];
+    uint8_t active;
+    bool pending;
+    bool loaded;
+    bool enabled;
+} i2c_slave_default_response_t;
+
 #if !CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2
 
 struct i2c_slave_dev_t {
@@ -233,9 +244,11 @@ struct i2c_slave_dev_t {
     uint32_t rx_data_count;                           // receive data count
     uint32_t tx_data_count;                           // callback-provided bytes loaded for the current transaction
     i2c_slave_receive_t receive_desc;                 // slave receive descriptor
+    i2c_slave_default_response_t *default_response;   // fallback response used while the transmit stream is empty
     bool receive_overflow;                            // bytes were dropped in the current receive transaction
-    bool request_pending;                             // target is stretching at a read address match
+    bool request_pending;                             // target is stretching while waiting for transmit data
     bool transmit_active;                             // controller is reading from the target
+    bool buffered_write_pending;                      // application will continue a partially buffered response
 };
 
 #endif // CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2

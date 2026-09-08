@@ -13,6 +13,7 @@
 #include "driver/i2c_master.h"
 #include "driver/i2c_slave.h"
 #include "esp_rom_gpio.h"
+#include "esp_rom_sys.h"
 #include "esp_log.h"
 #include "test_utils.h"
 #include "test_board.h"
@@ -420,5 +421,223 @@ static void slave_write_buffer_test_v2_single_byte(void)
 }
 
 TEST_CASE_MULTIPLE_DEVICES("I2C master read slave test single byte", "[i2c][test_env=generic_multi_device][timeout=150]", master_read_slave_test_v2_single_byte, slave_write_buffer_test_v2_single_byte);
+
+#define DEFAULT_RESPONSE_TEST_ITERATIONS 64
+#define DEFAULT_RESPONSE_TEST_LENGTH 64
+
+static const uint8_t s_default_response[] = { 0xd0, 0xd1, 0xd2, 0xd3 };
+static const uint8_t s_updated_default_response[] = { 0xe0, 0xe1, 0xe2 };
+
+static void master_default_response_test(void)
+{
+    i2c_master_bus_config_t bus_config = {
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .i2c_port = TEST_I2C_PORT,
+        .scl_io_num = I2C_MASTER_SCL_IO,
+        .sda_io_num = I2C_MASTER_SDA_IO,
+        .flags.enable_internal_pullup = true,
+    };
+    i2c_master_bus_handle_t bus;
+    TEST_ESP_OK(i2c_new_master_bus(&bus_config, &bus));
+
+    i2c_device_config_t device_config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = ESP_SLAVE_ADDR,
+        .scl_speed_hz = 400000,
+        .scl_wait_us = 20000,
+    };
+    i2c_master_dev_handle_t device;
+    TEST_ESP_OK(i2c_master_bus_add_device(bus, &device_config, &device));
+
+    unity_wait_for_signal("default response target ready");
+    uint8_t default_data[sizeof(s_default_response)] = {};
+    TEST_ESP_OK(i2c_master_receive(device, default_data, sizeof(default_data), -1));
+    TEST_ASSERT_EQUAL_HEX8_ARRAY(s_default_response, default_data, sizeof(default_data));
+    unity_send_signal("initial default consumed");
+
+    uint8_t explicit_data[DEFAULT_RESPONSE_TEST_LENGTH];
+    for (int iteration = 0; iteration < DEFAULT_RESPONSE_TEST_ITERATIONS; iteration++) {
+        unity_wait_for_signal("explicit response queued");
+        unity_send_signal("explicit read starting");
+        TEST_ESP_OK(i2c_master_receive(device, explicit_data, sizeof(explicit_data), -1));
+        for (size_t i = 0; i < sizeof(explicit_data); i++) {
+            TEST_ASSERT_EQUAL_HEX8((uint8_t)(iteration + i), explicit_data[i]);
+        }
+
+        memset(default_data, 0, sizeof(default_data));
+        TEST_ESP_OK(i2c_master_receive(device, default_data, sizeof(default_data), -1));
+        TEST_ASSERT_EQUAL_HEX8_ARRAY(s_default_response, default_data, sizeof(default_data));
+        unity_send_signal("explicit and fallback consumed");
+    }
+
+    unity_wait_for_signal("updated default ready");
+    uint8_t updated_default[sizeof(s_updated_default_response)] = {};
+    TEST_ESP_OK(i2c_master_receive(device, updated_default, sizeof(updated_default), -1));
+    TEST_ASSERT_EQUAL_HEX8_ARRAY(s_updated_default_response, updated_default, sizeof(updated_default));
+    unity_send_signal("default response test complete");
+
+    TEST_ESP_OK(i2c_master_bus_rm_device(device));
+    TEST_ESP_OK(i2c_del_master_bus(bus));
+}
+
+static void slave_default_response_test(void)
+{
+    i2c_slave_config_t config = {
+        .i2c_port = TEST_I2C_PORT,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .scl_io_num = I2C_SLAVE_SCL_IO,
+        .sda_io_num = I2C_SLAVE_SDA_IO,
+        .slave_addr = ESP_SLAVE_ADDR,
+        .send_buf_depth = DEFAULT_RESPONSE_TEST_LENGTH * 2,
+        .receive_buf_depth = DATA_LENGTH,
+        .flags.enable_internal_pullup = true,
+    };
+    i2c_slave_dev_handle_t target;
+    TEST_ESP_OK(i2c_new_slave_device(&config, &target));
+    TEST_ESP_OK(i2c_slave_set_default_response(target, s_default_response, sizeof(s_default_response)));
+
+    unity_send_signal("default response target ready");
+    unity_wait_for_signal("initial default consumed");
+
+    uint8_t explicit_data[DEFAULT_RESPONSE_TEST_LENGTH];
+    for (int iteration = 0; iteration < DEFAULT_RESPONSE_TEST_ITERATIONS; iteration++) {
+        for (size_t i = 0; i < sizeof(explicit_data); i++) {
+            explicit_data[i] = (uint8_t)(iteration + i);
+        }
+
+        TEST_ESP_OK(i2c_slave_set_buffered_write_pending(target, true));
+        uint32_t written = 0;
+        TEST_ESP_OK(i2c_slave_write(target, explicit_data, sizeof(explicit_data), &written, -1));
+        TEST_ASSERT_EQUAL(sizeof(explicit_data), written);
+        unity_send_signal("explicit response queued");
+        unity_wait_for_signal("explicit read starting");
+
+        // Sweep across the first FIFO-drain boundary. This stresses arbitration
+        // between TX_EMPTY on one core and clearing the producer state here.
+        esp_rom_delay_us(500 + (iteration % 16) * 40);
+        TEST_ESP_OK(i2c_slave_set_buffered_write_pending(target, false));
+        unity_wait_for_signal("explicit and fallback consumed");
+    }
+
+    TEST_ESP_OK(i2c_slave_set_default_response(target, s_updated_default_response, sizeof(s_updated_default_response)));
+    unity_send_signal("updated default ready");
+    unity_wait_for_signal("default response test complete");
+    TEST_ESP_OK(i2c_del_slave_device(target));
+}
+
+TEST_CASE_MULTIPLE_DEVICES("I2C slave default response arbitration", "[i2c][test_env=generic_multi_device][timeout=300]", master_default_response_test, slave_default_response_test);
+
+static DRAM_ATTR uint8_t s_callback_response[64];
+static volatile size_t s_callback_response_offset;
+static volatile size_t s_callback_transmitted;
+static SemaphoreHandle_t s_callback_done;
+
+static IRAM_ATTR bool slave_transmit_callback(i2c_slave_dev_handle_t target,
+                                              i2c_slave_transmit_event_data_t *event,
+                                              void *context)
+{
+    size_t remaining = sizeof(s_callback_response) - s_callback_response_offset;
+    size_t length = event->buffer_size < remaining ? event->buffer_size : remaining;
+    event->buffer = &s_callback_response[s_callback_response_offset];
+    event->length = length;
+    s_callback_response_offset += length;
+    return false;
+}
+
+static IRAM_ATTR bool slave_transmit_done_callback(i2c_slave_dev_handle_t target,
+                                                   const i2c_slave_transmit_done_event_data_t *event,
+                                                   void *context)
+{
+    BaseType_t task_woken = pdFALSE;
+    s_callback_transmitted = event->length;
+    s_callback_response_offset = 0;
+    xSemaphoreGiveFromISR(s_callback_done, &task_woken);
+    return task_woken == pdTRUE;
+}
+
+static const size_t s_callback_read_lengths[] = { 1, 7, 31, 32, 47 };
+
+static void master_synchronous_callback_test(void)
+{
+    i2c_master_bus_config_t bus_config = {
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .i2c_port = TEST_I2C_PORT,
+        .scl_io_num = I2C_MASTER_SCL_IO,
+        .sda_io_num = I2C_MASTER_SDA_IO,
+        .flags.enable_internal_pullup = true,
+    };
+    i2c_master_bus_handle_t bus;
+    TEST_ESP_OK(i2c_new_master_bus(&bus_config, &bus));
+
+    i2c_device_config_t device_config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = ESP_SLAVE_ADDR,
+        .scl_speed_hz = 400000,
+        .scl_wait_us = 20000,
+    };
+    i2c_master_dev_handle_t device;
+    TEST_ESP_OK(i2c_master_bus_add_device(bus, &device_config, &device));
+
+    unity_wait_for_signal("synchronous callback target ready");
+    uint8_t received[sizeof(s_callback_response)];
+    for (size_t iteration = 0; iteration < sizeof(s_callback_read_lengths) / sizeof(s_callback_read_lengths[0]); iteration++) {
+        size_t length = s_callback_read_lengths[iteration];
+        memset(received, 0, sizeof(received));
+        TEST_ESP_OK(i2c_master_receive(device, received, length, -1));
+        for (size_t i = 0; i < length; i++) {
+            TEST_ASSERT_EQUAL_HEX8((uint8_t)(0x40 + i), received[i]);
+        }
+        unity_send_signal("synchronous callback read complete");
+        unity_wait_for_signal("synchronous callback checked");
+    }
+
+    TEST_ESP_OK(i2c_master_bus_rm_device(device));
+    TEST_ESP_OK(i2c_del_master_bus(bus));
+}
+
+static void slave_synchronous_callback_test(void)
+{
+    i2c_slave_config_t config = {
+        .i2c_port = TEST_I2C_PORT,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .scl_io_num = I2C_SLAVE_SCL_IO,
+        .sda_io_num = I2C_SLAVE_SDA_IO,
+        .slave_addr = ESP_SLAVE_ADDR,
+        .send_buf_depth = sizeof(s_callback_response),
+        .receive_buf_depth = DATA_LENGTH,
+        .flags.enable_internal_pullup = true,
+    };
+    i2c_slave_dev_handle_t target;
+    TEST_ESP_OK(i2c_new_slave_device(&config, &target));
+
+    for (size_t i = 0; i < sizeof(s_callback_response); i++) {
+        s_callback_response[i] = (uint8_t)(0x40 + i);
+    }
+    s_callback_response_offset = 0;
+    s_callback_transmitted = 0;
+    s_callback_done = xSemaphoreCreateBinary();
+    TEST_ASSERT_NOT_NULL(s_callback_done);
+
+    i2c_slave_event_callbacks_t callbacks = {
+        .on_transmit = slave_transmit_callback,
+        .on_transmit_done = slave_transmit_done_callback,
+    };
+    TEST_ESP_OK(i2c_slave_register_event_callbacks(target, &callbacks, NULL));
+    unity_send_signal("synchronous callback target ready");
+
+    for (size_t iteration = 0; iteration < sizeof(s_callback_read_lengths) / sizeof(s_callback_read_lengths[0]); iteration++) {
+        TEST_ASSERT_EQUAL(pdTRUE, xSemaphoreTake(s_callback_done, pdMS_TO_TICKS(1000)));
+        TEST_ASSERT_EQUAL(s_callback_read_lengths[iteration], s_callback_transmitted);
+        unity_wait_for_signal("synchronous callback read complete");
+        unity_send_signal("synchronous callback checked");
+    }
+
+    TEST_ESP_OK(i2c_slave_register_event_callbacks(target, &(i2c_slave_event_callbacks_t) {}, NULL));
+    vSemaphoreDelete(s_callback_done);
+    s_callback_done = NULL;
+    TEST_ESP_OK(i2c_del_slave_device(target));
+}
+
+TEST_CASE_MULTIPLE_DEVICES("I2C slave synchronous transmit callbacks", "[i2c][test_env=generic_multi_device][timeout=150]", master_synchronous_callback_test, slave_synchronous_callback_test);
 
 #endif // SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE

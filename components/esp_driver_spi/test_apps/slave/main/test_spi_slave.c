@@ -10,6 +10,8 @@
 #include <string.h>
 #include "sdkconfig.h"
 #include "unity.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "test_utils.h"
 #include "test_spi_utils.h"
 #include "hal/spi_slave_hal.h"
@@ -35,6 +37,17 @@ static WORD_ALIGNED_ATTR uint8_t slave_rxbuf[320];
 
 static const uint8_t master_send[] = { 0x93, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0xaa, 0xcc, 0xff, 0xee, 0x55, 0x77, 0x88, 0x43 };
 static const uint8_t slave_send[] = { 0xaa, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10, 0x13, 0x57, 0x9b, 0xdf, 0x24, 0x68, 0xac, 0xe0 };
+
+static SemaphoreHandle_t s_slave_armed;
+
+static IRAM_ATTR void slave_armed_callback(spi_slave_transaction_t *transaction)
+{
+    BaseType_t task_woken = pdFALSE;
+    xSemaphoreGiveFromISR(s_slave_armed, &task_woken);
+    if (task_woken == pdTRUE) {
+        portYIELD_FROM_ISR();
+    }
+}
 
 static void custom_setup(void)
 {
@@ -298,6 +311,79 @@ TEST_CASE("test slave send unaligned", "[spi]")
     custom_teardown();
 
     ESP_LOGI(SLAVE_TAG, "test passed.");
+}
+
+static void test_slave_abort_and_reuse(spi_dma_chan_t dma_channel)
+{
+    spi_bus_config_t bus_config = SPI_BUS_TEST_DEFAULT_CONFIG();
+    bus_config.flags |= SPICOMMON_BUSFLAG_GPIO_PINS;
+    spi_device_interface_config_t device_config = {
+        .clock_speed_hz = 4 * 1000 * 1000,
+        .mode = 0,
+        .spics_io_num = PIN_NUM_CS,
+        .queue_size = 1,
+    };
+    spi_slave_interface_config_t slave_config = SPI_SLAVE_TEST_DEFAULT_CONFIG();
+    slave_config.queue_size = 1;
+    slave_config.post_setup_cb = slave_armed_callback;
+
+    s_slave_armed = xSemaphoreCreateBinary();
+    TEST_ASSERT_NOT_NULL(s_slave_armed);
+    TEST_ESP_OK(spi_bus_initialize(TEST_SPI_HOST, &bus_config, dma_channel));
+    TEST_ESP_OK(spi_bus_add_device(TEST_SPI_HOST, &device_config, &spi));
+    TEST_ESP_OK(spi_slave_initialize(TEST_SLAVE_HOST, &bus_config, &slave_config, dma_channel));
+    same_pin_func_sel(bus_config, device_config, 0);
+
+    WORD_ALIGNED_ATTR uint8_t tx_data[16];
+    WORD_ALIGNED_ATTR uint8_t rx_data[16];
+    for (size_t i = 0; i < sizeof(tx_data); i++) {
+        tx_data[i] = (uint8_t)(0x80 + i);
+        rx_data[i] = 0;
+    }
+    spi_slave_transaction_t slave_transaction = {
+        .length = sizeof(tx_data) * 8,
+        .rx_buffer = rx_data,
+    };
+    if (dma_channel != SPI_DMA_DISABLED) {
+        slave_transaction.flags = SPI_SLAVE_TRANS_DMA_BUFFER_ALIGN_AUTO;
+    }
+
+    TEST_ESP_OK(spi_slave_queue_trans(TEST_SLAVE_HOST, &slave_transaction, portMAX_DELAY));
+    TEST_ASSERT_EQUAL(pdTRUE, xSemaphoreTake(s_slave_armed, pdMS_TO_TICKS(1000)));
+    TEST_ESP_ERR(ESP_ERR_INVALID_STATE, spi_slave_free(TEST_SLAVE_HOST));
+    TEST_ESP_OK(spi_slave_abort_transaction(TEST_SLAVE_HOST, &slave_transaction));
+
+    spi_slave_transaction_t *completed = NULL;
+    TEST_ESP_OK(spi_slave_get_trans_result(TEST_SLAVE_HOST, &completed, pdMS_TO_TICKS(1000)));
+    TEST_ASSERT_EQUAL_PTR(&slave_transaction, completed);
+    TEST_ASSERT_EQUAL(0, slave_transaction.trans_len);
+
+    memset(rx_data, 0, sizeof(rx_data));
+    slave_transaction.trans_len = 0;
+    TEST_ESP_OK(spi_slave_queue_trans(TEST_SLAVE_HOST, &slave_transaction, portMAX_DELAY));
+    TEST_ASSERT_EQUAL(pdTRUE, xSemaphoreTake(s_slave_armed, pdMS_TO_TICKS(1000)));
+
+    spi_transaction_t master_transaction = {
+        .length = sizeof(tx_data) * 8,
+        .tx_buffer = tx_data,
+    };
+    TEST_ESP_OK(spi_device_transmit(spi, &master_transaction));
+    TEST_ESP_OK(spi_slave_get_trans_result(TEST_SLAVE_HOST, &completed, pdMS_TO_TICKS(1000)));
+    TEST_ASSERT_EQUAL_PTR(&slave_transaction, completed);
+    TEST_ASSERT_EQUAL(sizeof(tx_data) * 8, slave_transaction.trans_len);
+    TEST_ASSERT_EQUAL_HEX8_ARRAY(tx_data, rx_data, sizeof(tx_data));
+
+    TEST_ESP_OK(spi_slave_free(TEST_SLAVE_HOST));
+    TEST_ESP_OK(spi_bus_remove_device(spi));
+    TEST_ESP_OK(spi_bus_free(TEST_SPI_HOST));
+    vSemaphoreDelete(s_slave_armed);
+    s_slave_armed = NULL;
+}
+
+TEST_CASE("SPI slave abort retires transaction and permits reuse", "[spi]")
+{
+    test_slave_abort_and_reuse(SPI_DMA_DISABLED);
+    test_slave_abort_and_reuse(SPI_DMA_CH_AUTO);
 }
 
 #endif // !CONFIG_SPIRAM

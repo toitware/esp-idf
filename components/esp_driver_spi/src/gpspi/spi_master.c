@@ -451,6 +451,7 @@ esp_err_t spi_bus_add_device(spi_host_device_t host_id, const spi_device_interfa
     //duplex mode does absolutely nothing on the ESP32.
     SPI_CHECK(dev_config->cs_ena_pretrans <= 1 || (dev_config->address_bits == 0 && dev_config->command_bits == 0) ||
               (dev_config->flags & SPI_DEVICE_HALFDUPLEX), "In full-duplex mode, only support cs pretrans delay = 1 and without address_bits and command_bits", ESP_ERR_INVALID_ARG);
+    SPI_CHECK(dev_config->cs_ena_posttrans <= 15, "cs posttrans delay exceeds the hardware limit", ESP_ERR_INVALID_ARG);
 #endif
 
     //Check post_cb status when `SPI_DEVICE_NO_RETURN_RESULT` flag is set.
@@ -1305,17 +1306,9 @@ esp_err_t SPI_MASTER_ATTR spi_device_transmit(spi_device_handle_t handle, spi_tr
     return ESP_OK;
 }
 
-static esp_err_t SPI_MASTER_ISR_ATTR spi_device_acquire_bus_internal(spi_device_t *device, bool try_only, TickType_t wait)
+static esp_err_t SPI_MASTER_ISR_ATTR spi_device_acquire_bus_finish(spi_device_t *device)
 {
     spi_host_t *const host = device->host;
-    SPI_CHECK(!spi_bus_device_is_polling(device), "Cannot acquire bus when a polling transaction is in progress.", ESP_ERR_INVALID_STATE);
-
-    esp_err_t ret = try_only
-        ? spi_bus_lock_try_acquire_start(device->dev_lock)
-        : spi_bus_lock_acquire_start(device->dev_lock, wait);
-    if (ret != ESP_OK) {
-        return ret;
-    }
     host->device_acquiring_lock = device;
 
     ESP_LOGD(SPI_TAG, "device%d locked the bus", device->id);
@@ -1342,12 +1335,24 @@ static esp_err_t SPI_MASTER_ISR_ATTR spi_device_acquire_bus_internal(spi_device_
 esp_err_t SPI_MASTER_ISR_ATTR spi_device_acquire_bus(spi_device_t *device, TickType_t wait)
 {
     SPI_CHECK(wait == portMAX_DELAY, "acquire finite time not supported now.", ESP_ERR_INVALID_ARG);
-    return spi_device_acquire_bus_internal(device, false, wait);
+    SPI_CHECK(!spi_bus_device_is_polling(device), "Cannot acquire bus when a polling transaction is in progress.", ESP_ERR_INVALID_STATE);
+
+    esp_err_t ret = spi_bus_lock_acquire_start(device->dev_lock, wait);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    return spi_device_acquire_bus_finish(device);
 }
 
-esp_err_t SPI_MASTER_ISR_ATTR spi_device_try_acquire_bus(spi_device_t *device)
+esp_err_t spi_device_try_acquire_bus(spi_device_t *device)
 {
-    return spi_device_acquire_bus_internal(device, true, 0);
+    SPI_CHECK(!spi_bus_device_is_polling(device), "Cannot acquire bus when a polling transaction is in progress.", ESP_ERR_INVALID_STATE);
+
+    esp_err_t ret = spi_bus_lock_try_acquire_start(device->dev_lock);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    return spi_device_acquire_bus_finish(device);
 }
 
 // This function restore configurations required in the non-polling mode

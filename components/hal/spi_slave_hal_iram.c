@@ -57,6 +57,26 @@ void spi_slave_hal_enable_data_line(spi_slave_hal_context_t *hal)
     spi_ll_enable_miso(hal->hw, (hal->tx_buffer != NULL));
 }
 
+void spi_slave_hal_select_data_line_edges(spi_slave_hal_context_t *hal,
+                                          bool receive_enabled,
+                                          bool transmit_enabled)
+{
+#if CONFIG_IDF_TARGET_ESP32S3
+    if (hal->mode == 2 && !hal->use_dma) {
+        // Coupling TX to the RX clock shifts a single active data line by one
+        // bit. Keep the mode-2 full-duplex edges, but use the DMA edge setting
+        // when only one data line is connected.
+        bool full_duplex = receive_enabled && transmit_enabled;
+        spi_ll_slave_set_mode2_data_line_edges(hal->hw, full_duplex);
+        spi_ll_apply_config(hal->hw);
+    }
+#else
+    (void) hal;
+    (void) receive_enabled;
+    (void) transmit_enabled;
+#endif
+}
+
 void spi_slave_hal_store_result(spi_slave_hal_context_t *hal)
 {
     //when data of cur_trans->length are all sent, the slv_rdata_bit

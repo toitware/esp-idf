@@ -361,6 +361,26 @@ TEST_CASE("SPI Master test, interaction of multiple devs", "[spi]")
     TEST_ASSERT(success);
 }
 
+#if CONFIG_IDF_TARGET_ESP32
+TEST_CASE("SPI master validates the CS posttrans delay", "[spi]")
+{
+    spi_bus_config_t buscfg = SPI_BUS_TEST_DEFAULT_CONFIG();
+    spi_device_interface_config_t devcfg = SPI_DEVICE_TEST_DEFAULT_CONFIG();
+    spi_device_handle_t handle;
+
+    TEST_ESP_OK(spi_bus_initialize(TEST_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO));
+
+    devcfg.cs_ena_posttrans = 15;
+    TEST_ESP_OK(spi_bus_add_device(TEST_SPI_HOST, &devcfg, &handle));
+    TEST_ESP_OK(spi_bus_remove_device(handle));
+
+    devcfg.cs_ena_posttrans = 16;
+    TEST_ESP_ERR(ESP_ERR_INVALID_ARG, spi_bus_add_device(TEST_SPI_HOST, &devcfg, &handle));
+
+    TEST_ESP_OK(spi_bus_free(TEST_SPI_HOST));
+}
+#endif
+
 #if TEST_SOC_HAS_INPUT_ONLY_PINS  //There is no input-only pin, so this test could be ignored.
 static esp_err_t test_master_pins(int mosi, int miso, int sclk, int cs)
 {

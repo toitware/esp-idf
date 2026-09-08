@@ -619,9 +619,20 @@ static inline void spi_ll_slave_set_mode(spi_dev_t *hw, const int mode, bool dma
         hw->user.tsck_i_edge = 0;
         hw->slave.clk_mode_13 = 1;
     }
-    // In non-DMA mode 2, outputting on RSCK makes the first bit valid before
-    // the controller's leading edge. DMA uses the edge selection above.
-    hw->slave.rsck_data_out = mode == 2 && !dma_used;
+    hw->slave.rsck_data_out = 0;
+}
+
+/**
+ * Select the slave mode-2 receive and transmit edges.
+ *
+ * @param hw     Beginning address of the peripheral registers.
+ * @param edge   Internal edge value for both data lines.
+ */
+static inline void spi_ll_slave_set_mode2_data_line_edges(spi_dev_t *hw, bool edge)
+{
+    hw->user.rsck_i_edge = edge;
+    hw->user.tsck_i_edge = edge;
+    hw->slave.rsck_data_out = 0;
 }
 
 /**

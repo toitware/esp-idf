@@ -748,7 +748,7 @@ IRAM_ATTR esp_err_t spi_bus_lock_acquire_start(spi_bus_lock_dev_t *dev_handle, T
     return ESP_OK;
 }
 
-IRAM_ATTR esp_err_t spi_bus_lock_try_acquire_start(spi_bus_lock_dev_t *dev_handle)
+esp_err_t spi_bus_lock_try_acquire_start(spi_bus_lock_dev_t *dev_handle)
 {
     spi_bus_lock_t* lock = dev_handle->parent;
 

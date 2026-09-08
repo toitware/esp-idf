@@ -829,6 +829,8 @@ static inline void spi_ll_set_dummy(spi_dev_t *hw, int dummy_n)
  */
 static inline void spi_ll_master_set_cs_hold(spi_dev_t *hw, int hold)
 {
+    // The reset value limits the effective hold phase to six SPI clocks.
+    hw->ctrl1.cs_hold_delay = hold ? hold - 1 : 0;
     hw->ctrl2.hold_time = hold;
     hw->user.cs_hold = hold ? 1 : 0;
 }
