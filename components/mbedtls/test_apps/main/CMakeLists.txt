@@ -11,6 +11,13 @@ idf_component_register(SRC_DIRS "."
                     EMBED_TXTFILES ${TEST_CRTS}
                     WHOLE_ARCHIVE)
 
+if(CONFIG_MBEDTLS_DYNAMIC_BUFFER)
+    idf_component_get_property(mbedtls_dir mbedtls COMPONENT_DIR)
+    target_include_directories(${COMPONENT_LIB} PRIVATE
+                               "${mbedtls_dir}/port/dynamic"
+                               "${mbedtls_dir}/mbedtls/library")
+endif()
+
 idf_component_get_property(mbedtls mbedtls COMPONENT_LIB)
 target_compile_definitions(${mbedtls} INTERFACE "-DMBEDTLS_DEPRECATED_WARNING")
 target_compile_definitions(mbedtls PUBLIC "-DMBEDTLS_DEPRECATED_WARNING")
