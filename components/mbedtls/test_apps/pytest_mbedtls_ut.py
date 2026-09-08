@@ -12,6 +12,13 @@ def test_mbedtls(dut: Dut) -> None:
 
 @pytest.mark.esp32
 @pytest.mark.generic
+@pytest.mark.parametrize('config', ['dynamic_buffers'], indirect=True)
+def test_mbedtls_dynamic_buffers(dut: Dut) -> None:
+    dut.run_all_single_board_cases(group='dynamic_buffers')
+
+
+@pytest.mark.esp32
+@pytest.mark.generic
 @pytest.mark.parametrize(
     'config',
     [
