@@ -695,6 +695,7 @@ static esp_err_t s_i2c_transaction_start(i2c_master_dev_handle_t i2c_dev, int xf
     i2c_master->read_len_static = 0;
     i2c_master->read_buf_pos = 0;
     i2c_master->contains_read = false;
+    i2c_master->event = I2C_EVENT_ALIVE;
     i2c_master->async_error_event = I2C_EVENT_ALIVE;
     i2c_master->async_stopping_after_nack = false;
 
@@ -790,6 +791,9 @@ static void IRAM_ATTR i2c_master_isr_handler_default(void *arg)
         goto isr_exit;
     }
 
+    // NACK and transaction completion can arrive in the same interrupt.
+    // Preserve completion independently of which error takes priority.
+    i2c_master->trans_done = (int_mask & I2C_LL_INTR_MST_COMPLETE) != 0;
     if (int_mask & I2C_LL_INTR_NACK) {
         atomic_store(&i2c_master->status, I2C_STATUS_ACK_ERROR);
         i2c_master->event = I2C_EVENT_NACK;
@@ -803,7 +807,6 @@ static void IRAM_ATTR i2c_master_isr_handler_default(void *arg)
         // the peripheral.
         i2c_ll_disable_intr_mask(hal->dev, I2C_LL_MASTER_EVENT_INTR);
     } else if (int_mask & I2C_LL_INTR_MST_COMPLETE) {
-        i2c_master->trans_done = true;
         i2c_master->event = I2C_EVENT_DONE;
     }
     if (i2c_master->event != I2C_EVENT_ALIVE) {
@@ -821,10 +824,13 @@ static void IRAM_ATTR i2c_master_isr_handler_default(void *arg)
             goto isr_exit;
         }
         i2c_master_event_t interrupt_event = i2c_master->event;
-        if (interrupt_event == I2C_EVENT_NACK && !i2c_master->async_stopping_after_nack) {
+        if (interrupt_event == I2C_EVENT_NACK && !i2c_master->async_stopping_after_nack &&
+            !i2c_master->trans_done) {
             // The hardware skips later command slots after a NACK. Start a
             // standalone STOP and keep the transaction alive until its
-            // MST_COMPLETE interrupt. This releases the bus before user code
+            // MST_COMPLETE interrupt. If completion arrived with NACK, STOP
+            // has already ended; restarting it can leave no later interrupt.
+            // This releases the bus before user code
             // can remove the device and preserves the NACK for the callback.
             const i2c_ll_hw_cmd_t stop_command = {
                 .op_code = I2C_LL_CMD_STOP,
@@ -903,6 +909,7 @@ static void IRAM_ATTR i2c_master_isr_handler_default(void *arg)
                     i2c_master->read_len_static = 0;
                     i2c_master->read_buf_pos = 0;
                     i2c_master->contains_read = false;
+                    i2c_master->event = I2C_EVENT_ALIVE;
                     i2c_master->async_error_event = I2C_EVENT_ALIVE;
                     i2c_master->async_stopping_after_nack = false;
                     s_i2c_load_transaction(i2c_master, &t);
