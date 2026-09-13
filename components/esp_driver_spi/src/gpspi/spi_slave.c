@@ -25,6 +25,7 @@
 #include "sdkconfig.h"
 
 #include "driver/gpio.h"
+#include "esp_private/gpio.h"
 #include "driver/spi_slave.h"
 #include "hal/gpio_hal.h"
 #include "hal/spi_slave_hal.h"
@@ -293,6 +294,19 @@ esp_err_t spi_slave_initialize(spi_host_device_t host, const spi_bus_config_t *b
 #endif
     hal->mode = slave_config->mode;
     hal->use_dma = spihost[host]->dma_enabled;
+#if CONFIG_IDF_TARGET_ESP32S3
+    if (hal->mode & 2) {
+        // Implement CPOL=1 using CPOL=0 and an inverted input clock. The
+        // native mode-2 DMA path launches MISO on the controller's sampling
+        // edge, too late for controllers that sample without an input delay.
+        // Apply the same mapping to mode 3 and non-DMA transfers so changing
+        // modes does not leave the first output bit on the wrong edge.
+        gpio_func_sel(bus_config->sclk_io_num, PIN_FUNC_GPIO);
+        esp_rom_gpio_connect_in_signal(bus_config->sclk_io_num,
+                                       spi_periph_signal[host].spiclk_in, true);
+        hal->mode &= 1;
+    }
+#endif
     spi_slave_hal_setup_device(hal);
     return ESP_OK;
 
@@ -331,6 +345,13 @@ esp_err_t spi_slave_free(spi_host_device_t host)
         free(spihost[host]->dma_ctx->dmadesc_rx);
         spicommon_dma_chan_free(spihost[host]->dma_ctx);
     }
+#if CONFIG_IDF_TARGET_ESP32S3
+    if (spihost[host]->cfg.mode & 2) {
+        // Clear inversion before a later user routes this clock via IO_MUX.
+        esp_rom_gpio_connect_in_signal(GPIO_MATRIX_CONST_ZERO_INPUT,
+                                       spi_periph_signal[host].spiclk_in, false);
+    }
+#endif
     spicommon_bus_free_io_cfg(&spihost[host]->bus_config);
     esp_intr_free(spihost[host]->intr);
 #ifdef CONFIG_PM_ENABLE
