@@ -35,5 +35,6 @@ if(CONFIG_SOC_I2C_SUPPORT_SLAVE)
 endif()
 
 idf_component_register(SRCS ${srcs}
+                       PRIV_INCLUDE_DIRS "${IDF_PATH}/components/esp_driver_i2c"
                        PRIV_REQUIRES unity driver test_utils
                        WHOLE_ARCHIVE)
