@@ -18,6 +18,13 @@
 #include "test_utils.h"
 #include "test_board.h"
 
+#if CONFIG_IDF_TARGET_ESP32
+#include "esp_intr_alloc.h"
+#include "hal/i2c_ll.h"
+#include "i2c_private.h"
+#include "soc/i2c_struct.h"
+#endif
+
 #if SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
 
 TEST_CASE("I2C peripheral allocate slave all", "[i2c]")
@@ -641,3 +648,154 @@ static void slave_synchronous_callback_test(void)
 TEST_CASE_MULTIPLE_DEVICES("I2C slave synchronous transmit callbacks", "[i2c][test_env=generic_multi_device][timeout=150]", master_synchronous_callback_test, slave_synchronous_callback_test);
 
 #endif // SOC_I2C_SLAVE_CAN_GET_STRETCH_CAUSE
+
+#if CONFIG_IDF_TARGET_ESP32
+
+#define STALE_COUNT_TEST_LENGTH 20
+#define STALE_COUNT_REPETITIONS 3
+
+typedef struct {
+    size_t length;
+    bool overflow;
+    uint8_t data[STALE_COUNT_TEST_LENGTH * 2];
+} stale_count_receive_event_t;
+
+typedef struct {
+    uint32_t raw_interrupts;
+    uint32_t fifo_count;
+    esp_err_t disable_result;
+    esp_err_t enable_result;
+    bool callback_received;
+    stale_count_receive_event_t receive;
+} stale_count_result_t;
+
+static QueueHandle_t stale_count_queue;
+
+static uint8_t stale_count_pattern(int repetition, int index)
+{
+    return (uint8_t)(repetition * 37 + index * 31 + 23);
+}
+
+static bool stale_count_receive_cb(i2c_slave_dev_handle_t handle,
+                                   const i2c_slave_rx_done_event_data_t *event_data,
+                                   void *user_data)
+{
+    (void)handle;
+    (void)user_data;
+    stale_count_receive_event_t event = {
+        .length = event_data->length,
+        .overflow = event_data->overflow,
+    };
+    size_t copy_length = event_data->length < sizeof(event.data) ? event_data->length : sizeof(event.data);
+    memcpy(event.data, event_data->buffer, copy_length);
+    BaseType_t task_woken = pdFALSE;
+    xQueueSendFromISR(stale_count_queue, &event, &task_woken);
+    return task_woken == pdTRUE;
+}
+
+static void i2c_slave_refresh_rx_count_test(void)
+{
+    stale_count_result_t results[STALE_COUNT_REPETITIONS] = {0};
+    stale_count_queue = xQueueCreate(1, sizeof(stale_count_receive_event_t));
+    TEST_ASSERT_NOT_NULL(stale_count_queue);
+
+    i2c_slave_config_t slave_config = {
+        .i2c_port = TEST_I2C_PORT,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .scl_io_num = I2C_SLAVE_SCL_IO,
+        .sda_io_num = I2C_SLAVE_SDA_IO,
+        .slave_addr = ESP_SLAVE_ADDR,
+        .send_buf_depth = DATA_LENGTH,
+        .receive_buf_depth = DATA_LENGTH,
+        .flags.enable_internal_pullup = true,
+    };
+    i2c_slave_dev_handle_t slave = NULL;
+    TEST_ESP_OK(i2c_new_slave_device(&slave_config, &slave));
+    i2c_slave_event_callbacks_t callbacks = {
+        .on_receive = stale_count_receive_cb,
+    };
+    TEST_ESP_OK(i2c_slave_register_event_callbacks(slave, &callbacks, NULL));
+
+    for (int repetition = 0; repetition < STALE_COUNT_REPETITIONS; repetition++) {
+        // Classic ESP32 has a 32-byte RX FIFO and a 16-byte watermark. Holding
+        // only this target's I2C interrupt through STOP leaves 20 bytes in the
+        // FIFO with watermark and completion co-latched, without overflowing.
+        I2C0.int_clr.rx_fifo_ovf = 1;
+        results[repetition].disable_result = esp_intr_disable(slave->base->intr_handle);
+        unity_send_signal("target interrupt disabled");
+        unity_wait_for_signal("master write complete");
+
+        results[repetition].raw_interrupts = I2C0.int_raw.val;
+        i2c_ll_get_rxfifo_cnt(slave->base->hal.dev, &results[repetition].fifo_count);
+        results[repetition].enable_result = esp_intr_enable(slave->base->intr_handle);
+        results[repetition].callback_received = xQueueReceive(
+            stale_count_queue, &results[repetition].receive, pdMS_TO_TICKS(2000)) == pdTRUE;
+        unity_send_signal("target capture complete");
+    }
+
+    TEST_ESP_OK(i2c_del_slave_device(slave));
+    vQueueDelete(stale_count_queue);
+    stale_count_queue = NULL;
+
+    const uint32_t expected_interrupts = I2C_INTR_SLV_RXFIFO_WM | I2C_INTR_SLV_COMPLETE;
+    for (int repetition = 0; repetition < STALE_COUNT_REPETITIONS; repetition++) {
+        TEST_ESP_OK(results[repetition].disable_result);
+        TEST_ESP_OK(results[repetition].enable_result);
+        TEST_ASSERT_EQUAL_HEX32(expected_interrupts,
+                                results[repetition].raw_interrupts & expected_interrupts);
+        TEST_ASSERT_EQUAL_UINT32(STALE_COUNT_TEST_LENGTH, results[repetition].fifo_count);
+        TEST_ASSERT_FALSE(results[repetition].raw_interrupts & I2C_RXFIFO_OVF_INT_RAW_M);
+        TEST_ASSERT_TRUE(results[repetition].callback_received);
+        TEST_ASSERT_FALSE(results[repetition].receive.overflow);
+        TEST_ASSERT_EQUAL_UINT32(STALE_COUNT_TEST_LENGTH, results[repetition].receive.length);
+        for (int index = 0; index < STALE_COUNT_TEST_LENGTH; index++) {
+            TEST_ASSERT_EQUAL_HEX8(stale_count_pattern(repetition, index),
+                                   results[repetition].receive.data[index]);
+        }
+    }
+}
+
+static void i2c_master_refresh_rx_count_test(void)
+{
+    i2c_master_bus_config_t bus_config = {
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .i2c_port = TEST_I2C_PORT,
+        .scl_io_num = I2C_MASTER_SCL_IO,
+        .sda_io_num = I2C_MASTER_SDA_IO,
+        .flags.enable_internal_pullup = true,
+    };
+    i2c_master_bus_handle_t bus = NULL;
+    TEST_ESP_OK(i2c_new_master_bus(&bus_config, &bus));
+
+    i2c_device_config_t device_config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = ESP_SLAVE_ADDR,
+        .scl_speed_hz = 100000,
+    };
+    i2c_master_dev_handle_t device = NULL;
+    TEST_ESP_OK(i2c_master_bus_add_device(bus, &device_config, &device));
+
+    esp_err_t transmit_results[STALE_COUNT_REPETITIONS];
+    for (int repetition = 0; repetition < STALE_COUNT_REPETITIONS; repetition++) {
+        uint8_t data[STALE_COUNT_TEST_LENGTH];
+        for (int index = 0; index < STALE_COUNT_TEST_LENGTH; index++) {
+            data[index] = stale_count_pattern(repetition, index);
+        }
+        unity_wait_for_signal("target interrupt disabled");
+        transmit_results[repetition] = i2c_master_transmit(device, data, sizeof(data), 1000);
+        unity_send_signal("master write complete");
+        unity_wait_for_signal("target capture complete");
+    }
+
+    TEST_ESP_OK(i2c_master_bus_rm_device(device));
+    TEST_ESP_OK(i2c_del_master_bus(bus));
+    for (int repetition = 0; repetition < STALE_COUNT_REPETITIONS; repetition++) {
+        TEST_ESP_OK(transmit_results[repetition]);
+    }
+}
+
+TEST_CASE_MULTIPLE_DEVICES("I2C slave refreshes RX FIFO count between interrupt causes",
+                           "[i2c][test_env=generic_multi_device][timeout=150]",
+                           i2c_master_refresh_rx_count_test, i2c_slave_refresh_rx_count_test);
+
+#endif // CONFIG_IDF_TARGET_ESP32
