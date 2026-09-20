@@ -260,9 +260,12 @@ static bool s_i2c_write_command(i2c_master_bus_handle_t i2c_master, i2c_operatio
             i2c_master->async_break = true;
         }
     } else {
-        // Handle consecutive i2c write operations
+        // Drain the TX FIFO before another write or a repeated START. The
+        // START handler queues the next address byte, which would otherwise
+        // overwrite data when this write has filled the FIFO.
         i2c_operation_t next_transaction = i2c_master->i2c_trans.ops[i2c_master->trans_idx + 1];
-        if (next_transaction.hw_cmd.op_code == I2C_LL_CMD_WRITE) {
+        if (next_transaction.hw_cmd.op_code == I2C_LL_CMD_WRITE ||
+            next_transaction.hw_cmd.op_code == I2C_LL_CMD_RESTART) {
             portENTER_CRITICAL_SAFE(&handle->spinlock);
             i2c_ll_master_write_cmd_reg(hal->dev, hw_end_cmd, i2c_master->cmd_idx + 1);
             portEXIT_CRITICAL_SAFE(&handle->spinlock);
