@@ -121,6 +121,7 @@ typedef struct {
     bool                    auto_clear_before_cb;    /*!< Set to auto clear DMA TX descriptor before callback, i2s will always send zero automatically if no data to send */
     uint32_t                rw_pos;         /*!< reading/writing pointer position */
     void                    *curr_ptr;      /*!< Pointer to current dma buffer */
+    bool                    curr_started;   /*!< TX only: the DMA has started sending curr_ptr, so no more data can be appended to it */
     lldesc_t                **desc;         /*!< dma descriptor array */
     uint8_t                 **bufs;         /*!< dma buffer array */
 } i2s_dma_t;
