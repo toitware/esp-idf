@@ -858,6 +858,9 @@ esp_err_t i2s_init_dma_intr(i2s_chan_handle_t handle, int intr_flag)
     intr_flag |= handle->intr_prio_flags;
     /* Initialize I2S module interrupt */
     if (handle->dir == I2S_DIR_TX) {
+        /* Raise the EOF interrupt once the DMA has read the whole buffer, not once the data has left the
+         * FIFO. See the GDMA strategy above. */
+        i2s_ll_dma_enable_eof_on_fifo_empty(handle->controller->hal.dev, false);
         esp_intr_alloc_intrstatus(i2s_periph_signal[port_id].irq, intr_flag,
                                   (uint32_t)i2s_ll_get_interrupt_status_reg(handle->controller->hal.dev), I2S_LL_TX_EVENT_MASK,
                                   i2s_dma_tx_callback, handle, &handle->dma.dma_chan);
