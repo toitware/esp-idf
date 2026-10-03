@@ -574,16 +574,17 @@ uint32_t i2s_get_source_clk_freq(i2s_clock_src_t clk_src, uint32_t mclk_freq_hz)
 }
 
 /**
- * @brief   Track whether the DMA has started sending the TX buffer that is being filled
+ * @brief   Track which TX buffer the DMA is sending
  * @note    Called from the TX EOF interrupt. When `finish_desc` is done, the DMA has moved on to the
  *          next descriptor in the ring. If either of them holds the buffer that the writer is filling,
- *          data appended to that buffer later would be dropped or sent out of order.
+ *          data written to that buffer later would be dropped or sent out of order.
  */
-static void IRAM_ATTR i2s_tx_update_curr_started(i2s_chan_handle_t handle, lldesc_t *finish_desc)
+static void IRAM_ATTR i2s_tx_update_dma_ptr(i2s_chan_handle_t handle, lldesc_t *finish_desc)
 {
     void *finished_buf = (void *)finish_desc->buf;
     void *started_buf = (void *)STAILQ_NEXT(finish_desc, qe)->buf;
     portENTER_CRITICAL_ISR(&g_i2s.spinlock);
+    handle->dma.dma_ptr = started_buf;
     if (handle->dma.curr_ptr == finished_buf || handle->dma.curr_ptr == started_buf) {
         handle->dma.curr_started = true;
     }
@@ -591,15 +592,41 @@ static void IRAM_ATTR i2s_tx_update_curr_started(i2s_chan_handle_t handle, lldes
 }
 
 /**
+ * @brief   Set the TX buffer that the DMA is sending, outside of the EOF interrupt
+ */
+static void i2s_tx_set_dma_ptr(i2s_chan_handle_t handle, void *buf)
+{
+    portENTER_CRITICAL(&g_i2s.spinlock);
+    handle->dma.dma_ptr = buf;
+    if (buf != NULL && handle->dma.curr_ptr == buf) {
+        handle->dma.curr_started = true;
+    }
+    portEXIT_CRITICAL(&g_i2s.spinlock);
+}
+
+/**
  * @brief   Make `buf` the TX buffer that is being filled
+ * @note    The DMA may have started sending `buf` already: the writer can take the next buffer of
+ *          the ring from the queue just before the EOF interrupt that moves the DMA to it.
  */
 static void i2s_tx_set_curr_ptr(i2s_chan_handle_t handle, void *buf)
 {
     portENTER_CRITICAL(&g_i2s.spinlock);
     handle->dma.curr_ptr = buf;
-    handle->dma.curr_started = false;
+    handle->dma.curr_started = buf != NULL && buf == handle->dma.dma_ptr;
     portEXIT_CRITICAL(&g_i2s.spinlock);
     handle->dma.rw_pos = 0;
+}
+
+/**
+ * @brief   Whether the DMA has started sending the TX buffer that is being filled
+ */
+static bool i2s_tx_curr_started(i2s_chan_handle_t handle)
+{
+    portENTER_CRITICAL(&g_i2s.spinlock);
+    bool started = handle->dma.curr_started;
+    portEXIT_CRITICAL(&g_i2s.spinlock);
+    return started;
 }
 
 /* Temporary ignore the deprecated warning of i2s_event_data_t::data */
@@ -651,7 +678,7 @@ static bool IRAM_ATTR i2s_dma_tx_callback(gdma_channel_handle_t dma_chan, gdma_e
 
     finish_desc = (lldesc_t *)event_data->tx_eof_desc_addr;
     void *curr_buf = (void *)finish_desc->buf;
-    i2s_tx_update_curr_started(handle, finish_desc);
+    i2s_tx_update_dma_ptr(handle, finish_desc);
     i2s_event_data_t evt = {
         .data = &(finish_desc->buf),
         .dma_buf = curr_buf,
@@ -749,7 +776,7 @@ static void IRAM_ATTR i2s_dma_tx_callback(void *arg)
     if (handle && (status & I2S_LL_EVENT_TX_EOF)) {
         i2s_hal_get_out_eof_des_addr(&(handle->controller->hal), (uint32_t *)&finish_desc);
         void *curr_buf = (void *)finish_desc->buf;
-        i2s_tx_update_curr_started(handle, finish_desc);
+        i2s_tx_update_dma_ptr(handle, finish_desc);
         evt.data = &(finish_desc->buf);
         evt.dma_buf = curr_buf;
         evt.size = handle->dma.buf_size;
@@ -1215,6 +1242,10 @@ esp_err_t i2s_channel_enable(i2s_chan_handle_t handle)
 #if CONFIG_PM_ENABLE
     esp_pm_lock_acquire(handle->pm_lock);
 #endif
+    if (handle->dir == I2S_DIR_TX) {
+        /* The DMA starts with the first buffer, which preload may have left partially filled */
+        i2s_tx_set_dma_ptr(handle, handle->dma.desc[0]->buf);
+    }
     handle->start(handle);
     handle->state = I2S_CHAN_STATE_RUNNING;
     if (handle->dir == I2S_DIR_RX) {
@@ -1253,6 +1284,7 @@ esp_err_t i2s_channel_disable(i2s_chan_handle_t handle)
     handle->dma.rw_pos = 0;
     handle->stop(handle);
     if (handle->dir == I2S_DIR_TX) {
+        i2s_tx_set_dma_ptr(handle, NULL);
         /* TX queue is reset when the channel is disabled
            In case the queue is wrongly reset after preload the data */
         xQueueReset(handle->msg_queue);
@@ -1342,21 +1374,19 @@ esp_err_t i2s_channel_write(i2s_chan_handle_t handle, const void *src, size_t si
     /* The binary semaphore can only be taken when the channel has been enabled and no other writing operation in progress */
     ESP_RETURN_ON_FALSE(xSemaphoreTake(handle->binary, pdMS_TO_TICKS(timeout_ms)) == pdTRUE, ESP_ERR_INVALID_STATE, TAG, "The channel is not enabled");
     src_byte = (char *)src;
-    /* The previous write may have left a partially filled buffer that the DMA has started sending
-     * since, for example because the writer was too slow and the channel ran out of data. Data
-     * appended to it would be dropped or sent out of order. Leave the rest of that buffer as is
-     * (silent when auto clear is enabled) and continue with the next free buffer. */
-    if (handle->dma.curr_started) {
-        handle->dma.rw_pos = handle->dma.buf_size;
-    }
     while (size > 0 && handle->state == I2S_CHAN_STATE_RUNNING) {
-        if (handle->dma.rw_pos == handle->dma.buf_size || handle->dma.curr_ptr == NULL) {
+        /* Don't write to a buffer that the DMA has started sending. For example, the previous write
+         * may have left the buffer partially filled, and the channel ran out of data since. Data
+         * written to it would be dropped or sent out of order. Leave the rest of that buffer as is
+         * (silent when auto clear is enabled) and continue with the next free buffer. */
+        if (handle->dma.rw_pos == handle->dma.buf_size || handle->dma.curr_ptr == NULL || i2s_tx_curr_started(handle)) {
             void *next_buf;
             if (xQueueReceive(handle->msg_queue, &next_buf, pdMS_TO_TICKS(timeout_ms)) == pdFALSE) {
                 ret = ESP_ERR_TIMEOUT;
                 break;
             }
             i2s_tx_set_curr_ptr(handle, next_buf);
+            continue;
         }
         data_ptr = (char *)handle->dma.curr_ptr;
         data_ptr += handle->dma.rw_pos;
@@ -1364,7 +1394,17 @@ esp_err_t i2s_channel_write(i2s_chan_handle_t handle, const void *src, size_t si
         if (bytes_can_write > size) {
             bytes_can_write = size;
         }
-        memcpy(data_ptr, src_byte, bytes_can_write);
+        /* Check again and copy without being preempted in between. The DMA sends at the sample rate,
+         * so a copy that starts before the DMA has reached `rw_pos` stays ahead of it. */
+        vTaskSuspendAll();
+        bool started = i2s_tx_curr_started(handle);
+        if (!started) {
+            memcpy(data_ptr, src_byte, bytes_can_write);
+        }
+        xTaskResumeAll();
+        if (started) {
+            continue;
+        }
 #if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
         esp_cache_msync(handle->dma.curr_ptr, handle->dma.buf_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
 #endif
