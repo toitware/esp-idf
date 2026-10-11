@@ -1,4 +1,5 @@
 // Copyright (C) 2026 Toit contributors.
+// SPDX-FileCopyrightText: 2026 Toit contributors
 // SPDX-License-Identifier: Unlicense OR CC0-1.0
 
 #include "sdkconfig.h"
