@@ -658,6 +658,11 @@ esp_err_t i2c_new_slave_device(const i2c_slave_config_t *slave_config, i2c_slave
     i2c_ll_set_txfifo_empty_thr(hal->dev, SOC_I2C_FIFO_LEN / 2);
     i2c_ll_set_rxfifo_full_thr(hal->dev, SOC_I2C_FIFO_LEN / 2);
     i2c_ll_set_sda_timing(hal->dev, 10, 10);
+#if CONFIG_IDF_TARGET_ESP32S3
+    // Match the usual master filter threshold. A zero threshold lets short
+    // input spikes advance the slave state machine and terminate reads early.
+    i2c_ll_master_set_filter(hal->dev, 7);
+#endif
 
 #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32C3
     // Match upstream ESP-IDF initialization for ESP32-S3 and ESP32-C3.
