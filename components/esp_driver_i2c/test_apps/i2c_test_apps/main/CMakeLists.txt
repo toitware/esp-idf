@@ -4,7 +4,7 @@ set(srcs "test_app_main.c"
 
 if(CONFIG_SOC_I2C_SUPPORT_SLAVE)
     if(CONFIG_I2C_ENABLE_SLAVE_DRIVER_VERSION_2)
-        list(APPEND srcs "test_i2c_slave_v2.c")
+        list(APPEND srcs "test_i2c_slave_v2.c" "test_i2c_slave_filter.c")
     else()
         list(APPEND srcs "test_i2c_multi.c")
 

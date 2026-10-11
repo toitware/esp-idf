@@ -18,6 +18,13 @@ def test_i2c(dut: Dut) -> None:
     dut.run_all_single_board_cases()
 
 
+@pytest.mark.esp32s3
+@pytest.mark.generic
+@pytest.mark.parametrize('config', ['slave_v2'], indirect=True)
+def test_i2c_slave_v2(dut: Dut) -> None:
+    dut.run_all_single_board_cases()
+
+
 @pytest.mark.esp32
 @pytest.mark.esp32c3
 @pytest.mark.esp32c5
