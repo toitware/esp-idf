@@ -1,4 +1,5 @@
 // Copyright (C) 2026 Toit contributors.
+// SPDX-FileCopyrightText: 2026 Toit contributors
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdlib.h>

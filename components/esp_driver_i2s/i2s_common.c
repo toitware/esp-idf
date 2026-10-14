@@ -1244,7 +1244,7 @@ esp_err_t i2s_channel_enable(i2s_chan_handle_t handle)
 #endif
     if (handle->dir == I2S_DIR_TX) {
         /* The DMA starts with the first buffer, which preload may have left partially filled */
-        i2s_tx_set_dma_ptr(handle, handle->dma.desc[0]->buf);
+        i2s_tx_set_dma_ptr(handle, (void *)handle->dma.desc[0]->buf);
     }
     handle->start(handle);
     handle->state = I2S_CHAN_STATE_RUNNING;
@@ -1381,11 +1381,19 @@ esp_err_t i2s_channel_write(i2s_chan_handle_t handle, const void *src, size_t si
          * (silent when auto clear is enabled) and continue with the next free buffer. */
         if (handle->dma.rw_pos == handle->dma.buf_size || handle->dma.curr_ptr == NULL || i2s_tx_curr_started(handle)) {
             void *next_buf;
-            if (xQueueReceive(handle->msg_queue, &next_buf, pdMS_TO_TICKS(timeout_ms)) == pdFALSE) {
+            /* Wait without removing a buffer: a task switch after dequeue could let the DMA
+             * cycle through and requeue it before the writer records it as current. */
+            if (xQueuePeek(handle->msg_queue, &next_buf, pdMS_TO_TICKS(timeout_ms)) == pdFALSE) {
                 ret = ESP_ERR_TIMEOUT;
                 break;
             }
-            i2s_tx_set_curr_ptr(handle, next_buf);
+            vTaskSuspendAll();
+            /* The ISR may have changed the queue since the peek. Only adopt a buffer that
+             * we actually dequeue now, and never block with the scheduler suspended. */
+            if (xQueueReceive(handle->msg_queue, &next_buf, 0) == pdTRUE) {
+                i2s_tx_set_curr_ptr(handle, next_buf);
+            }
+            xTaskResumeAll();
             continue;
         }
         data_ptr = (char *)handle->dma.curr_ptr;
@@ -1400,14 +1408,18 @@ esp_err_t i2s_channel_write(i2s_chan_handle_t handle, const void *src, size_t si
         bool started = i2s_tx_curr_started(handle);
         if (!started) {
             memcpy(data_ptr, src_byte, bytes_can_write);
+#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
+            /* Publish to DMA before allowing task preemption. Critical context also prevents
+             * the optional chunked cache-sync implementation from taking a blocking mutex. */
+            portENTER_CRITICAL(&g_i2s.spinlock);
+            esp_cache_msync(handle->dma.curr_ptr, handle->dma.buf_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
+            portEXIT_CRITICAL(&g_i2s.spinlock);
+#endif
         }
         xTaskResumeAll();
         if (started) {
             continue;
         }
-#if SOC_CACHE_INTERNAL_MEM_VIA_L1CACHE
-        esp_cache_msync(handle->dma.curr_ptr, handle->dma.buf_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M);
-#endif
         size -= bytes_can_write;
         src_byte += bytes_can_write;
         handle->dma.rw_pos += bytes_can_write;
