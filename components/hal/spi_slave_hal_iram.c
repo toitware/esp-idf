@@ -45,9 +45,23 @@ void spi_slave_hal_push_tx_buffer(spi_slave_hal_context_t *hal)
     }
 }
 
+static uint32_t spi_slave_hal_rx_bitlen(const spi_slave_hal_context_t *hal)
+{
+    uint32_t bitlen = hal->bitlen;
+#if CONFIG_IDF_TARGET_ESP32
+    // At the configured RX limit, classic ESP32 DMA drops the final word.
+    // Keep the hardware limit one word beyond the receive capacity. The DMA
+    // descriptors still bound writes to the caller's original buffer.
+    if (hal->use_dma && hal->rx_buffer && bitlen <= SPI_LL_DMA_MAX_BIT_LEN - 32) {
+        bitlen += 32;
+    }
+#endif
+    return bitlen;
+}
+
 void spi_slave_hal_set_trans_bitlen(spi_slave_hal_context_t *hal)
 {
-    spi_ll_slave_set_rx_bitlen(hal->hw, hal->bitlen);
+    spi_ll_slave_set_rx_bitlen(hal->hw, spi_slave_hal_rx_bitlen(hal));
     spi_ll_slave_set_tx_bitlen(hal->hw, hal->bitlen);
 }
 
@@ -79,12 +93,16 @@ void spi_slave_hal_select_data_line_edges(spi_slave_hal_context_t *hal,
 
 void spi_slave_hal_store_result(spi_slave_hal_context_t *hal)
 {
-    //when data of cur_trans->length are all sent, the slv_rdata_bit
-    //will be the length sent-1 (i.e. cur_trans->length-1 ), otherwise
-    //the length sent.
+    // At the hardware RX limit the counter reads limit - 1; otherwise it
+    // reports the number of received bits. Apply this correction to the
+    // programmed limit before clamping to the caller's receive capacity.
     hal->rcv_bitlen = spi_ll_slave_get_rcv_bitlen(hal->hw);
-    if (hal->rcv_bitlen == hal->bitlen - 1) {
+    uint32_t rx_bitlen = spi_slave_hal_rx_bitlen(hal);
+    if (hal->rcv_bitlen == rx_bitlen - 1) {
         hal->rcv_bitlen++;
+    }
+    if (rx_bitlen != hal->bitlen && hal->rcv_bitlen > hal->bitlen) {
+        hal->rcv_bitlen = hal->bitlen;
     }
     if (!hal->use_dma && hal->rx_buffer) {
         //Copy result out

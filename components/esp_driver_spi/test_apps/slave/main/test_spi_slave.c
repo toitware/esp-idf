@@ -386,6 +386,90 @@ TEST_CASE("SPI slave abort retires transaction and permits reuse", "[spi]")
     test_slave_abort_and_reuse(SPI_DMA_CH_AUTO);
 }
 
+#if CONFIG_IDF_TARGET_ESP32
+TEST_CASE("SPI slave DMA receives exactly full buffers", "[spi]")
+{
+    const size_t sizes[] = {4, 16, 4088, 4092, 4096, 4100, 4104, 8192};
+    const int extra_bits[] = {0, -32, -1, 1, 32};
+    const size_t maximum = 8192;
+    uint8_t *tx_data = heap_caps_malloc(maximum + 4, MALLOC_CAP_DMA);
+    uint8_t *rx_data = heap_caps_malloc(maximum + 16, MALLOC_CAP_DMA);
+    TEST_ASSERT_NOT_NULL(tx_data);
+    TEST_ASSERT_NOT_NULL(rx_data);
+    s_slave_armed = xSemaphoreCreateBinary();
+    TEST_ASSERT_NOT_NULL(s_slave_armed);
+
+    for (int mode = 0; mode < 4; mode++) {
+        spi_bus_config_t bus_config = SPI_BUS_TEST_DEFAULT_CONFIG();
+        bus_config.flags |= SPICOMMON_BUSFLAG_GPIO_PINS;
+        bus_config.max_transfer_sz = maximum + 4;
+        spi_device_interface_config_t device_config = {
+            .clock_speed_hz = 1000 * 1000,
+            .mode = mode,
+            .spics_io_num = PIN_NUM_CS,
+            .queue_size = 1,
+            .cs_ena_pretrans = 1,
+            .cs_ena_posttrans = 0,
+        };
+        spi_slave_interface_config_t slave_config = SPI_SLAVE_TEST_DEFAULT_CONFIG();
+        slave_config.mode = mode;
+        slave_config.queue_size = 1;
+        slave_config.post_setup_cb = slave_armed_callback;
+        TEST_ESP_OK(spi_bus_initialize(TEST_SPI_HOST, &bus_config, SPI_DMA_CH_AUTO));
+        TEST_ESP_OK(spi_bus_add_device(TEST_SPI_HOST, &device_config, &spi));
+        TEST_ESP_OK(spi_slave_initialize(TEST_SLAVE_HOST, &bus_config, &slave_config, SPI_DMA_CH_AUTO));
+        same_pin_func_sel(bus_config, device_config, 0);
+
+        for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); s++) {
+            size_t capacity = sizes[s];
+            for (size_t b = 0; b < sizeof(extra_bits) / sizeof(extra_bits[0]); b++) {
+                int wire_bits = capacity * 8 + extra_bits[b];
+                if (wire_bits == 0) {
+                    continue;
+                }
+                size_t received_bits = wire_bits < capacity * 8 ? wire_bits : capacity * 8;
+                for (size_t i = 0; i < maximum + 4; i++) {
+                    tx_data[i] = (uint8_t)(i * 73 + s * 7 + b * 11 + mode);
+                }
+                // Fresh contents are essential: stale data can hide the missing final word.
+                memset(rx_data, 0xa5, maximum + 16);
+                spi_slave_transaction_t slave_transaction = {
+                    .length = capacity * 8,
+                    .rx_buffer = rx_data,
+                };
+                spi_transaction_t master_transaction = {
+                    .length = wire_bits,
+                    .tx_buffer = tx_data,
+                };
+                ESP_LOGI(SLAVE_TAG, "exact RX mode=%d capacity=%u wire_bits=%d", mode, (unsigned)capacity, wire_bits);
+                TEST_ESP_OK(spi_slave_queue_trans(TEST_SLAVE_HOST, &slave_transaction, portMAX_DELAY));
+                TEST_ASSERT_EQUAL(pdTRUE, xSemaphoreTake(s_slave_armed, pdMS_TO_TICKS(1000)));
+                TEST_ESP_OK(spi_device_transmit(spi, &master_transaction));
+                spi_slave_transaction_t *completed = NULL;
+                TEST_ESP_OK(spi_slave_get_trans_result(TEST_SLAVE_HOST, &completed, pdMS_TO_TICKS(1000)));
+                TEST_ASSERT_EQUAL_PTR(&slave_transaction, completed);
+                TEST_ASSERT_EQUAL(received_bits, slave_transaction.trans_len);
+                // ESP32 DMA only guarantees complete four-byte words.
+                size_t complete_bytes = received_bits / 32 * 4;
+                if (complete_bytes) {
+                    TEST_ASSERT_EQUAL_HEX8_ARRAY(tx_data, rx_data, complete_bytes);
+                }
+                for (size_t i = capacity; i < capacity + 16; i++) {
+                    TEST_ASSERT_EQUAL_HEX8(0xa5, rx_data[i]);
+                }
+            }
+        }
+        TEST_ESP_OK(spi_slave_free(TEST_SLAVE_HOST));
+        TEST_ESP_OK(spi_bus_remove_device(spi));
+        TEST_ESP_OK(spi_bus_free(TEST_SPI_HOST));
+    }
+    vSemaphoreDelete(s_slave_armed);
+    s_slave_armed = NULL;
+    free(rx_data);
+    free(tx_data);
+}
+#endif // CONFIG_IDF_TARGET_ESP32
+
 #endif // !CONFIG_SPIRAM
 
 #endif // #if (TEST_SPI_PERIPH_NUM >= 2)
